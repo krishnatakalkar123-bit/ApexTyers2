@@ -1,0 +1,6 @@
+node_modules/
+.env
+apextyre.db
+apextyre.db-shm
+apextyre.db-wal
+npm-debug.log*

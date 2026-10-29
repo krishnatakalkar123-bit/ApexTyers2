@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Owner dashboard | ApexTyre</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/admin.js" defer></script>
+</head>
+<body class="admin-page">
+  <header class="site-header admin-header">
+    <a class="brand" href="/">apex<span>Tyre</span><small>.com</small></a>
+    <div id="admin-nav" hidden><span>SHOP OWNER</span><button class="text-button" id="logout-button">Log out</button></div>
+  </header>
+  <main class="admin-main">
+    <section id="login-panel" class="login-panel">
+      <p class="eyebrow">OWNER ACCESS</p><h1>Welcome back.</h1>
+      <p>Sign in to manage products, orders, and customers.</p>
+      <form id="login-form" class="stack-form">
+        <label for="admin-username">Username / Email
+          <span class="admin-input-wrap">
+            <svg class="admin-user-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+            <input id="admin-username" name="username" type="text" autocomplete="username" value="admin" required>
+          </span>
+        </label>
+        <label for="admin-password">Owner password
+          <span class="admin-input-wrap">
+            <input id="admin-password" name="password" type="password" autocomplete="current-password" required>
+            <button class="admin-password-toggle" type="button" data-admin-password-toggle aria-label="Show password" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </span>
+        </label>
+        <p class="form-error" id="login-error" role="alert"></p>
+        <button class="button button-primary" type="submit">Sign in <span aria-hidden="true">→</span></button>
+      </form>
+    </section>
+
+    <section id="dashboard-panel" hidden>
+      <div class="admin-title"><div><p class="eyebrow">SHOP OVERVIEW</p><h1>Dashboard</h1></div><button class="button button-dark" id="add-product-button">+ Add tyre</button></div>
+      <div class="stat-grid">
+        <article class="stat-card"><span>Total revenue</span><strong id="total-sales">₹0.00</strong><small>Approved orders only</small></article>
+        <article class="stat-card"><span>Total orders</span><strong id="total-orders">0</strong><small>All-time orders</small></article>
+        <article class="stat-card"><span>Average order value</span><strong id="average-order-value">₹0.00</strong><small>Approved orders only</small></article>
+        <article class="stat-card"><span>Pending orders</span><strong id="pending-orders">0</strong><small>Awaiting owner approval</small></article>
+        <article class="stat-card"><span>Total tyres sold</span><strong id="products-sold">0</strong><small>Approved order quantities</small></article>
+      </div>
+      <div class="admin-secondary-stats">
+        <span>Low stock: <strong id="low-stock">0</strong> tyres</span>
+        <span>Customers: <strong id="customer-count">0</strong></span>
+      </div>
+      <section class="admin-card diwali-settings-card">
+        <div class="card-heading"><div><h2>Diwali banner settings</h2><p>Only the signed-in owner can publish this message to the storefront.</p></div></div>
+        <form id="diwali-banner-form" class="diwali-settings-form">
+          <label for="diwali-banner-message">Offer ticker text
+            <textarea id="diwali-banner-message" name="message" rows="2" maxlength="240" placeholder="🪔 Add your current Diwali offer or store announcement" aria-describedby="diwali-banner-hint"></textarea>
+          </label>
+          <div class="diwali-settings-actions">
+            <span id="diwali-banner-hint">Up to 240 characters. Leave blank to hide the ticker.</span>
+            <button class="button button-primary" type="submit">Save banner</button>
+          </div>
+          <p class="form-error" id="diwali-banner-error" role="alert"></p>
+        </form>
+      </section>
+      <div class="analytics-grid">
+        <section class="admin-card analytics-chart-card">
+          <div class="card-heading analytics-heading">
+            <div><h2>Sales analytics</h2><p>Revenue trend · syncs every 5 seconds</p></div>
+            <div class="chart-actions">
+              <select id="sales-period" aria-label="Sales chart period">
+                <option value="daily">Daily · 30 days</option>
+                <option value="monthly">Monthly · 12 months</option>
+              </select>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="sales-chart" role="img" aria-label="Revenue trend chart"></canvas>
+            <div id="sales-chart-tooltip" class="chart-tooltip" role="status" hidden></div>
+          </div>
+          <p class="chart-footnote">Only owner-approved orders contribute to recognized sales revenue.</p>
+        </section>
+        <section class="admin-card brand-breakdown-card">
+          <div class="card-heading"><div><h2>Revenue by brand</h2><p>Share of owner-approved sales</p></div></div>
+          <div id="brand-breakdown" class="brand-breakdown" aria-live="polite"></div>
+        </section>
+      </div>
+      <div class="admin-columns">
+        <section class="admin-card">
+          <div class="card-heading"><h2>Order management</h2><button class="text-button" id="refresh-orders">Refresh</button></div>
+          <div class="table-wrap"><table><thead><tr><th>Order</th><th>Customer details</th><th>Tyre model</th><th>Qty</th><th>Total incl. GST</th><th>Status</th><th>Actions</th></tr></thead><tbody id="orders-body"></tbody></table></div>
+        </section>
+        <section class="admin-card">
+          <div class="card-heading"><h2>Tyre inventory</h2><button class="text-button" id="refresh-products">Refresh</button></div>
+          <div id="admin-products" class="inventory-list"></div>
+        </section>
+      </div>
+      <section class="admin-card customers-card">
+        <div class="card-heading"><h2>Customers</h2><span>Order history summary</span></div>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Contact</th><th>Orders</th><th>Total spent</th></tr></thead><tbody id="customers-body"></tbody></table></div>
+      </section>
+    </section>
+  </main>
+  <dialog id="product-dialog" class="checkout-dialog">
+    <div class="dialog-top"><div><p class="eyebrow">INVENTORY</p><h2 id="product-dialog-title">Add a tyre</h2></div><button class="close-button" id="close-product" type="button" aria-label="Close">×</button></div>
+    <form id="product-form">
+      <input type="hidden" name="id">
+      <div class="form-grid">
+        <label>Brand<input name="brand" required placeholder="CEAT"></label>
+        <label>Model<input name="model" required></label>
+        <label>Tyre size<input name="tyre_size" required placeholder="185/65 R15"></label>
+        <label>Rim size<input name="rim_size" required placeholder="15"></label>
+        <label>Vehicle type<input name="vehicle_type" required placeholder="Car"></label>
+        <label>Price (₹)<input name="price" type="number" min="0" step="0.01" required></label>
+        <label>Discount (%)<input name="discount" type="number" min="0" max="100" step="0.01" value="0" required></label>
+        <label>Stock quantity<input name="stock_quantity" type="number" min="0" step="1" required></label>
+        <label class="wide">Image URL<input name="image_url" type="url" placeholder="https://…"></label>
+      </div>
+      <p class="form-error" id="product-error" role="alert"></p>
+      <button class="button button-primary submit-button" type="submit">Save tyre</button>
+    </form>
+  </dialog>
+  <dialog id="customer-dialog" class="checkout-dialog">
+    <div class="dialog-top">
+      <div><p class="eyebrow">CUSTOMER PROFILE</p><h2 id="customer-dialog-title">Order history</h2></div>
+      <button class="close-button" id="close-customer" type="button" aria-label="Close">×</button>
+    </div>
+    <div id="customer-history"></div>
+  </dialog>
+  <div id="admin-toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

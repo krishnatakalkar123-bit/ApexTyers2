@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0c6258">
+  <meta name="description" content="Shop trusted tyres for cars, SUVs and bikes at ApexTyre. Compare brands, fitment details and prices.">
+  <title>Tyres &amp; Wheels Marketplace | ApexTyre.com</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/catalog-data.js" defer></script>
+  <script src="/script.js" defer></script>
+</head>
+<body class="marketplace" data-theme="dark">
+  <div class="market-topline">
+    <div class="market-container topline-inner">
+      <span>India's trusted multi-brand tyre partner</span>
+      <div><a href="#contact" data-view-link="contact">Need help? Talk to our team</a><span>Mon–Sat · 9:00 AM–7:00 PM</span></div>
+    </div>
+  </div>
+  <header class="market-header">
+    <div class="market-container market-header-main">
+      <a class="market-logo" href="#home" data-view-link="home" aria-label="ApexTyre home">
+        <span class="logo-mark" aria-hidden="true"><svg viewBox="0 0 42 42"><path d="M21 3 39 35H3L21 3Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="m22 13-9 14h8l-1 7 10-15h-8l1-6Z" fill="currentColor"/></svg></span>
+        <span>apexTyre<small>.com</small></span>
+      </a>
+      <label class="location-picker">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+        <span class="location-label">Deliver to</span>
+        <select id="location-select" aria-label="Delivery location">
+          <option>Pune</option>
+          <option>Mumbai</option>
+          <option>Chhatrapati Sambhajinagar</option>
+          <option>Nashik</option>
+          <option>All Maharashtra</option>
+        </select>
+      </label>
+      <form class="market-search" id="header-search" role="search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg>
+        <input id="product-search" type="search" placeholder="Search for car, bike, or truck tyres..." autocomplete="off" aria-label="Search tyres">
+        <button type="submit"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg><span>Search</span></button>
+      </form>
+      <button class="market-quote-button" type="button" data-open-quote>Get Best Price</button>
+      <div class="header-commerce-actions">
+        <button class="market-cart-button" id="open-cart" type="button" aria-label="Open shopping cart">
+          <span aria-hidden="true">🛒</span> Cart <span class="cart-count" id="cart-count" aria-live="polite">0</span>
+        </button>
+        <button class="theme-toggle" id="theme-toggle" type="button" data-theme-toggle aria-label="Switch to light theme" aria-pressed="true"><span aria-hidden="true" data-theme-icon>☀️</span></button>
+      </div>
+      <button class="mobile-menu-button" id="mobile-menu-button" type="button" aria-expanded="false" aria-controls="header-utilities" aria-label="Open menu"><span></span><span></span><span></span></button>
+      <div class="header-utilities" id="header-utilities">
+        <a class="utility-pill utility-link" href="#about" data-view-link="about"><svg class="utility-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V5.8A1.8 1.8 0 0 1 5.8 4h12.4A1.8 1.8 0 0 1 20 5.8V20"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>Exporters</span></a>
+        <button class="utility-pill utility-sell" type="button" data-open-quote><svg class="utility-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h18v13H3zM7 7V4h10v3M3 12h18"/><path d="M10 12v2h4v-2"/></svg><span>Sell Tyres</span><span class="utility-arrow" aria-hidden="true">↗</span></button>
+        <a class="utility-pill utility-link" href="#contact" data-view-link="contact"><svg class="utility-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9a2.5 2.5 0 1 1 4.2 1.8c-1.1 1-1.8 1.4-1.8 3M12 17.2v.1"/></svg><span>Help Support</span></a>
+        <button class="utility-pill utility-action" type="button" data-open-quote><svg class="utility-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v9a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4.5a2.5 2.5 0 0 1-1-2z"/><path d="M8 8h8M8 12h6"/></svg><span>Messages</span></button>
+        <button class="utility-pill utility-account" type="button" data-open-owner><span class="account-badge"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10V7a7 7 0 0 1 14 0v3M4 10h16v11H4z"/><circle cx="12" cy="15" r="1"/></svg></span><span class="account-copy"><strong>Sign In</strong><small>Owner Login</small></span><span class="account-arrow" aria-hidden="true">↗</span></button>
+      </div>
+    </div>
+    <nav class="market-nav" aria-label="Main navigation">
+      <div class="market-container nav-inner">
+        <button class="nav-tab active" type="button" data-view-link="home" aria-current="page">Store Catalog</button>
+        <button class="nav-tab" type="button" data-view-link="about">About Us</button>
+        <button class="nav-tab" type="button" data-view-link="contact">Contact Us</button>
+        <button class="nav-tab community-nav-link" type="button" data-view-link="community">
+          <span>Our Community</span>
+          <span class="community-ig-badge" aria-label="Instagram">IG</span>
+        </button>
+        <span class="nav-note">Genuine brands · Expert fitment · Local support</span>
+      </div>
+    </nav>
+  </header>
+  <aside class="diwali-ticker" id="diwali-ticker" aria-label="Current Diwali offers" hidden>
+    <div class="diwali-ticker-track" aria-hidden="true">
+      <span class="diwali-ticker-message" id="diwali-offer-primary"></span>
+      <span class="diwali-ticker-message" id="diwali-offer-copy"></span>
+    </div>
+    <span class="sr-only" id="diwali-offer-accessible"></span>
+  </aside>
+
+  <main>
+    <section class="view-panel" id="view-home" data-view-panel="home">
+      <div class="market-hero">
+        <div class="market-container market-hero-content">
+          <div class="hero-copy-market">
+            <p class="market-kicker"><span></span> TYRES FOR EVERY ROAD</p>
+            <h1>Find the right tyre.<br><em>Drive with confidence.</em></h1>
+            <p>Compare trusted brands, check the fitment and connect with a local tyre partner—all in one place.</p>
+            <div class="hero-actions"><button class="hero-primary" type="button" data-scroll-catalog>Explore tyre catalog <span aria-hidden="true">→</span></button><button class="hero-secondary" type="button" data-open-quote>Request a bulk quote</button></div>
+            <div class="hero-trust"><span>✓ Genuine brand selection</span><span>✓ Fitment-first support</span><span>✓ Local Maharashtra team</span></div>
+          </div>
+          <div class="hero-visual">
+            <div class="hero-photo" role="img" aria-label="Premium automotive tyre and wheel"></div>
+            <div class="hero-photo-badge"><strong>DRIVE SMARTER</strong><span>Quality tyres. Clear choices.</span></div>
+            <div class="hero-stat"><span class="hero-stat-icon" aria-hidden="true">◉</span><span><strong>Multi-brand</strong><small>Tyre selection</small></span></div>
+          </div>
+        </div>
+      </div>
+
+      <section class="market-container marketplace-catalog" id="tyres">
+        <div class="catalog-title-row">
+          <div><p class="market-kicker">APEXTYRE MARKETPLACE</p><h2>Explore tyres by brand and fitment</h2><p class="catalog-subtitle">Catalogue prices and photos are illustrative, not manufacturer-specific. Submit any listing through checkout; the owner will confirm the exact fitment, final price, and availability before approval.</p></div>
+          <div class="catalog-count"><strong id="results-count">—</strong><span>products listed</span></div>
+        </div>
+        <div class="chip-scroll" role="group" aria-label="Filter products">
+          <button class="filter-chip active" type="button" data-filter="all" aria-pressed="true">All Tyres</button>
+          <button class="filter-chip" type="button" data-filter="sports" aria-pressed="false">Sports Car Tyre</button>
+          <button class="filter-chip" type="button" data-filter="tubeless" aria-pressed="false">Tubeless Tyre</button>
+          <button class="filter-chip" type="button" data-filter="suv" aria-pressed="false">Jeep / SUV Tyre</button>
+          <button class="filter-chip" type="button" data-filter="brand:MRF" aria-pressed="false">MRF Tyres</button>
+          <button class="filter-chip" type="button" data-filter="brand:Apollo" aria-pressed="false">Apollo Tyres</button>
+          <button class="filter-chip" type="button" data-filter="brand:Bridgestone" aria-pressed="false">Bridgestone</button>
+          <button class="filter-chip" type="button" data-filter="brand:Goodyear" aria-pressed="false">Goodyear</button>
+          <button class="filter-chip" type="button" data-filter="brand:CEAT" aria-pressed="false">CEAT</button>
+          <button class="filter-chip" type="button" data-filter="brand:Michelin" aria-pressed="false">Michelin</button>
+          <button class="filter-chip" type="button" data-filter="brand:JK Tyre" aria-pressed="false">JK Tyre</button>
+          <button class="filter-chip" type="button" data-filter="brand:TVS Eurogrip" aria-pressed="false">TVS Eurogrip</button>
+          <button class="filter-chip" type="button" data-filter="brand:Ralco" aria-pressed="false">Ralco</button>
+          <button class="filter-chip" type="button" data-filter="brand:Maxxis" aria-pressed="false">Maxxis</button>
+          <button class="filter-chip" type="button" data-filter="brand:Continental" aria-pressed="false">Continental</button>
+          <button class="filter-chip" type="button" data-filter="brand:Yokohama" aria-pressed="false">Yokohama</button>
+          <button class="filter-chip" type="button" data-filter="below:3000" aria-pressed="false">Below ₹3,000</button>
+        </div>
+        <div class="catalog-toolbar">
+          <span><span class="online-dot"></span>Buy online on stocked items · demo listings are enquiry only</span>
+          <label for="sort-products">Sort by
+            <select id="sort-products">
+              <option value="featured">Featured</option>
+              <option value="price-low">Price: Low to high</option>
+              <option value="price-high">Price: High to low</option>
+              <option value="brand">Brand A–Z</option>
+            </select>
+          </label>
+        </div>
+        <div id="product-list" class="market-product-grid" aria-live="polite">
+          <p class="market-notice">Loading tyre catalog…</p>
+        </div>
+      </section>
+      <section class="market-container promise-strip" aria-label="ApexTyre service promises">
+        <article><span>01</span><div><strong>Multi-brand choice</strong><small>Compare leading tyre makers</small></div></article>
+        <article><span>02</span><div><strong>Fitment-first advice</strong><small>Get help choosing your size</small></div></article>
+        <article><span>03</span><div><strong>Local partner support</strong><small>Talk with our Maharashtra team</small></div></article>
+      </section>
+    </section>
+
+    <section class="view-panel market-container info-view" id="view-about" data-view-panel="about" hidden>
+      <div class="info-banner"><p class="market-kicker">ABOUT APEXTYRE</p><h1>Your tyre partner,<br><em>from selection to fitment.</em></h1><p>apexTyre.com is Maharashtra’s multi-brand automotive tyre marketplace, bringing business buyers and individual drivers together with trusted tyre choices. From a single replacement tyre to recurring fleet requirements, our B2B and B2C marketplace makes it easier to explore products, compare fitment details and connect with a local tyre partner.</p><p>Our catalogue spans more than 12 leading Indian and global brands, including MRF, Apollo, CEAT, Bridgestone, Goodyear, Michelin, JK Tyre, TVS Eurogrip, Ralco, Maxxis, Continental and Yokohama. We work with manufacturer and distribution partners to make genuine products easier to find, with clear product information and support to verify the exact size, variant, price and availability before an order is approved.</p><p>Choosing tyres is about more than a brand name. Our team helps customers consider their vehicle, driving conditions and budget, then connects them with fitting support through our Maharashtra service network. Our customer support is available around the clock to help with product questions, order updates and the next step toward a confident fitment.</p><button class="hero-primary" type="button" data-scroll-catalog>Browse the catalog <span aria-hidden="true">→</span></button></div>
+      <div class="about-grid"><article><span>01</span><h2>12+ trusted brands</h2><p>Explore familiar Indian and international tyre makers across passenger cars, SUVs and two-wheelers.</p></article><article><span>02</span><h2>Authenticity &amp; fitment</h2><p>Review product details and get help confirming genuine product sourcing, the right size and vehicle fitment.</p></article><article><span>03</span><h2>Support across Maharashtra</h2><p>Get 24/7 customer support and connect with local tyre and fitting partners for your next journey.</p></article></div>
+      <div class="about-cta"><div><p class="market-kicker">FOR FLEETS &amp; RESELLERS</p><h2>Looking for a multi-tyre quote?</h2><p>Share what you need and our team can help you with availability and pricing.</p></div><button class="hero-primary" type="button" data-open-quote>Request a quote <span aria-hidden="true">→</span></button></div>
+    </section>
+
+    <section class="view-panel market-container info-view contact-view" id="view-contact" data-view-panel="contact" hidden>
+      <div class="contact-heading"><p class="market-kicker">CONTACT OUR TEAM</p><h1>Here to help you<br><em>get the right fit.</em></h1><p>Connect with the people behind ApexTyre for tyre selection, fitment questions, availability or business enquiries.</p></div>
+      <div class="contact-team">
+        <article class="contact-person contact-founder"><span class="contact-avatar">SN</span><div><small>LEAD DEVELOPER &amp; FOUNDER</small><h2>Swapnil Narwade</h2><a href="tel:+918999210727">+91 89992 10727</a><a class="contact-email" href="mailto:swapnilnaewade73@gmail.com">swapnilnaewade73@gmail.com</a></div><a class="call-icon" href="tel:+918999210727" aria-label="Call Swapnil Narwade">↗</a></article>
+        <article class="contact-person"><span class="contact-avatar">SH</span><div><small>SALES &amp; CUSTOMER SUPPORT</small><h2>Shravan Hulsure</h2><a href="tel:+919022548095">+91 90225 48095</a></div><a class="call-icon" href="tel:+919022548095" aria-label="Call Shravan Hulsure">↗</a></article>
+        <article class="contact-person"><span class="contact-avatar">PR</span><div><small>PRODUCT &amp; FITMENT SUPPORT</small><h2>Piyush Rajpal</h2><a href="tel:+919370239823">+91 93702 39823</a></div><a class="call-icon" href="tel:+919370239823" aria-label="Call Piyush Rajpal">↗</a></article>
+        <article class="contact-person"><span class="contact-avatar">AH</span><div><small>BUSINESS ENQUIRIES</small><h2>Atharv Harihar</h2><a href="tel:+918080131713">+91 80801 31713</a></div><a class="call-icon" href="tel:+918080131713" aria-label="Call Atharv Harihar">↗</a></article>
+      </div>
+      <div class="contact-helpline"><div class="helpline-icon" aria-hidden="true">☎</div><div><small>APEXTYRE CENTRAL HELPLINE</small><strong>One number for tyre questions and order support.</strong><span>Our team is here to help you find your next step.</span></div><a href="tel:+918999210727">+91 89992 10727 <span aria-hidden="true">↗</span></a></div>
+      <div class="contact-footer-card"><div><strong>Need a quick price check?</strong><span>Send a product enquiry and our team will get back to you.</span></div><button class="hero-primary" type="button" data-open-quote>Get Best Price <span aria-hidden="true">→</span></button></div>
+    </section>
+
+    <section class="view-panel market-container info-view community-view" id="tab-community" data-view-panel="community" hidden>
+      <div class="community-hero">
+        <div class="community-copy">
+          <p class="market-kicker">APEXTYRE ON INSTAGRAM</p>
+          <h1>Join Our Tyreworx<br><em>Community.</em></h1>
+          <p>Follow @apex.tyreworx for tyre-fitment inspiration, workshop moments and stories from the road. Visit our official Instagram profile for the latest posts and community updates.</p>
+          <a class="community-follow-button" href="https://www.instagram.com/apex.tyreworx?utm_source=ig_web_button_share_sheet&amp;dlrf=ZDNlZDc0MzIxNw==" target="_blank" rel="noopener noreferrer">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1"/></svg>
+            Follow @apex.tyreworx
+            <span aria-hidden="true">↗</span>
+          </a>
+          <div class="community-stats" aria-label="Instagram community information">
+            <div><strong>@apex.tyreworx</strong><span>Official Instagram</span></div>
+            <div><strong>Live on Instagram</strong><span>Follower count</span></div>
+            <div><strong>12 brands</strong><span>Tyres to explore</span></div>
+          </div>
+        </div>
+        <a class="community-profile-card" href="https://www.instagram.com/apex.tyreworx?utm_source=ig_web_button_share_sheet&amp;dlrf=ZDNlZDc0MzIxNw==" target="_blank" rel="noopener noreferrer" aria-label="Visit the ApexTyre Instagram profile">
+          <span class="instagram-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1"/></svg>
+          </span>
+          <span class="community-profile-handle">@apex.tyreworx</span>
+          <strong>Tyres, fitment<br>&amp; stories from the road.</strong>
+          <span class="community-profile-link">Open Instagram <span aria-hidden="true">↗</span></span>
+        </a>
+      </div>
+
+      <div class="community-highlights">
+        <div class="community-section-heading">
+          <div><p class="market-kicker">FROM THE COMMUNITY</p><h2>Fitment ideas. Real journeys.</h2></div>
+          <a href="https://www.instagram.com/apex.tyreworx?utm_source=ig_web_button_share_sheet&amp;dlrf=ZDNlZDc0MzIxNw==" target="_blank" rel="noopener noreferrer">Explore the Instagram feed <span aria-hidden="true">↗</span></a>
+        </div>
+        <p class="community-disclaimer">These are community themes, not embedded or live Instagram posts. Visit our profile for current fitments, customer stories and updates.</p>
+        <div class="community-story-grid">
+          <article class="community-story-card story-fitment">
+            <div class="community-story-art" role="img" aria-label="Car tyre and wheel, fitment inspiration"></div>
+            <div><span>FITMENT SPOTLIGHT</span><h3>Find a fit that suits your drive</h3><p>Explore car and SUV tyre options, then confirm the right size with our team.</p></div>
+          </article>
+          <article class="community-story-card story-workshop">
+            <div class="community-story-art" role="img" aria-label="Tyre tread detail, workshop inspiration"></div>
+            <div><span>TYRE TALK</span><h3>Small checks make a difference</h3><p>Follow along for practical tyre-care tips and workshop highlights.</p></div>
+          </article>
+          <article class="community-story-card story-customer">
+            <div class="community-story-art" role="img" aria-label="Road trip scenery, customer story inspiration"></div>
+            <div><span>ON THE ROAD</span><h3>Every journey has a story</h3><p>See customer moments and shared road stories on our Instagram feed.</p></div>
+          </article>
+        </div>
+      </div>
+      <div class="community-bottom-cta">
+        <div><p class="market-kicker">JOIN THE CONVERSATION</p><h2>Tag us in your next tyre story.</h2><p>Follow ApexTyre and share your fitment or road-trip moments with our community.</p></div>
+        <a class="community-follow-button" href="https://www.instagram.com/apex.tyreworx?utm_source=ig_web_button_share_sheet&amp;dlrf=ZDNlZDc0MzIxNw==" target="_blank" rel="noopener noreferrer">Follow on Instagram <span aria-hidden="true">↗</span></a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="market-footer">
+    <div class="market-container footer-main"><a class="market-logo footer-logo" href="#home" data-view-link="home"><span class="logo-mark" aria-hidden="true">△</span><span>apexTyre<small>.com</small></span></a><p>Better fitment starts with a better choice.</p><div><button type="button" data-view-link="about">About us</button><button type="button" data-view-link="contact">Contact</button><button type="button" data-view-link="community">Community</button><button type="button" data-open-owner>Owner login</button></div></div>
+    <div class="market-container footer-legal"><span>© <span id="current-year"></span> ApexTyre. Product prices and availability may vary; confirm details with our team.</span><span>Built for the road ahead.</span></div>
+    <div class="market-container footer-credit">© 2026 apexTyre.com | Designed &amp; Developed by Krishna Takalkar (KT SOLUTION). All Rights Reserved.</div>
+  </footer>
+
+  <dialog id="cart-dialog" class="market-dialog cart-dialog" aria-labelledby="cart-title">
+    <div class="dialog-top">
+      <div><p class="market-kicker">YOUR SHOPPING CART</p><h2 id="cart-title">Cart <span id="cart-title-count">(0)</span></h2></div>
+      <button class="close-button" data-close-dialog type="button" aria-label="Close cart">×</button>
+    </div>
+    <div id="cart-items" class="cart-items" aria-live="polite"></div>
+    <div class="cart-summary" id="cart-summary" aria-live="polite"></div>
+    <button class="hero-primary dialog-submit" id="cart-checkout" type="button" disabled>Proceed to Checkout <span aria-hidden="true">→</span></button>
+    <p class="form-hint">Delivery is ₹99 per order. Product availability and final fitment are confirmed when your order is reviewed.</p>
+  </dialog>
+
+  <dialog id="checkout-dialog" class="market-dialog">
+    <div class="dialog-top"><div><p class="market-kicker">SECURE CHECKOUT</p><h2>Complete your order</h2></div><button class="close-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+    <div id="selected-product" class="selected-product"></div>
+    <div id="checkout-tax-summary" class="checkout-tax-summary" aria-live="polite"></div>
+    <form id="checkout-form">
+      <div id="checkout-quantity-row">
+        <label>Quantity<input name="quantity" type="number" min="1" max="10" value="1" required></label>
+      </div>
+      <div class="form-grid">
+        <label>Full name<input name="fullName" autocomplete="name" required></label>
+        <label>Mobile / WhatsApp<input name="phone" type="tel" autocomplete="tel" required></label>
+        <label>Email address<input name="email" type="email" autocomplete="email" required></label>
+        <label>Vehicle model <span class="optional">(optional)</span><input name="vehicleDetails" placeholder="e.g. Honda City 2021"></label>
+        <label class="wide">Delivery address<input name="address" autocomplete="street-address" required></label>
+        <label>Landmark <span class="optional">(optional)</span><input name="landmark"></label>
+        <label>Pincode<input name="pincode" autocomplete="postal-code" required></label>
+        <label>City<input name="city" autocomplete="address-level2" required></label>
+        <label>State<input name="state" autocomplete="address-level1" required></label>
+        <label>Payment preference<select name="paymentMethod" required><option value="cod">Cash on delivery</option><option value="upi">UPI (payment instructions to follow)</option><option value="online">Online gateway (coming soon)</option></select></label>
+      </div>
+      <p class="form-hint">Catalogue-only or out-of-stock tyres are submitted as special-order requests. The owner will confirm final price and availability before approval. UPI and online payment options are placeholders; payment is not collected here.</p>
+      <p class="form-error" id="checkout-error" role="alert"></p>
+      <button class="hero-primary dialog-submit" type="submit">Place Order <span aria-hidden="true">→</span></button>
+    </form>
+  </dialog>
+
+  <dialog id="order-confirmation-dialog" class="market-dialog compact-dialog">
+    <div class="dialog-top"><div><p class="market-kicker">ORDER RECEIVED</p><h2>Order Placed Successfully!</h2></div><button class="close-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+    <p class="dialog-intro" id="order-confirmation-summary"></p>
+    <div class="order-confirmation-details">
+      <strong id="confirmation-order-code"></strong>
+      <span id="confirmation-order-total"></span>
+      <span id="confirmation-order-status">Pending Approval</span>
+    </div>
+    <p class="form-hint" id="confirmation-status-hint">The owner will review your order. Revenue and the GST invoice are recorded after approval.</p>
+    <a class="hero-primary dialog-submit invoice-download-button" id="customer-invoice-download" href="#" hidden>Download PDF Invoice <span aria-hidden="true">↓</span></a>
+  </dialog>
+
+  <dialog id="quote-dialog" class="market-dialog compact-dialog">
+    <div class="dialog-top"><div><p class="market-kicker">SUPPLIER ENQUIRY</p><h2 id="quote-title">Get your best price</h2></div><button class="close-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+    <p class="dialog-intro">Tell us what you’re looking for. We’ll open a WhatsApp enquiry with our team.</p>
+    <form id="quote-form" class="quote-form">
+      <label>Your name<input name="name" autocomplete="name" required></label>
+      <label>Mobile number<input name="phone" type="tel" autocomplete="tel" required></label>
+      <label>Requirement<textarea name="requirement" rows="3" required placeholder="Tyre model, size, quantity or fleet requirement"></textarea></label>
+      <button class="hero-primary dialog-submit" type="submit">Continue to WhatsApp <span aria-hidden="true">↗</span></button>
+    </form>
+  </dialog>
+
+  <dialog id="owner-dialog" class="market-dialog compact-dialog">
+    <div class="dialog-top"><div><p class="market-kicker">APEXTYRE OWNER ACCESS</p><h2>Sign in to manage your shop</h2></div><button class="close-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+    <p class="dialog-intro">Sign in to update inventory and manage orders.</p>
+    <form id="owner-form" class="quote-form">
+      <label for="owner-username">Username / Email
+        <span class="owner-input-wrap">
+          <svg class="owner-input-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+          <input id="owner-username" name="username" type="text" autocomplete="username" value="admin" required>
+        </span>
+      </label>
+      <label for="owner-password">Owner Password
+        <span class="owner-input-wrap">
+          <input id="owner-password" name="password" type="password" autocomplete="current-password" required>
+          <button class="password-toggle" type="button" data-password-toggle aria-label="Show password" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </span>
+      </label>
+      <p class="form-error" id="owner-error" role="alert"></p>
+      <button class="hero-primary dialog-submit" type="submit">Sign in <span aria-hidden="true">→</span></button>
+    </form>
+  </dialog>
+  <div id="toast" class="market-toast" role="status" aria-live="polite"></div>
+</body>
+</html>
