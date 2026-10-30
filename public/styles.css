@@ -1402,3 +1402,73 @@ html { overflow-x: clip; }
   .admin-page .stat-card strong { font-size: 20px; overflow-wrap: anywhere; }
   .admin-page .analytics-heading { flex-direction: column; }
 }
+
+.customer-view { min-height: 55vh; padding-block: clamp(42px, 8vw, 92px); }
+.customer-card, .customer-profile-card, .customer-order-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  box-shadow: 0 16px 42px #1c302011;
+}
+.customer-card { width: min(100%, 560px); padding: clamp(22px, 5vw, 42px); margin-inline: auto; }
+.customer-card h1, .customer-account-heading h1 { margin-bottom: 10px; font: 800 clamp(28px, 5vw, 42px)/1.1 Manrope, sans-serif; letter-spacing: -1.6px; }
+.customer-intro { margin-bottom: 24px; color: var(--muted); font-size: 13px; line-height: 1.65; }
+.customer-form { display: grid; gap: 14px; }
+.customer-form label small { color: var(--muted); font-weight: 400; }
+.customer-form .hero-primary { width: 100%; justify-content: center; }
+.customer-form input, .customer-orders-heading select {
+  min-width: 0;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ink);
+}
+.customer-secondary {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+.customer-secondary:hover { border-color: var(--dark); }
+.customer-switch { margin: 20px 0 0; color: var(--muted); font-size: 12px; }
+.customer-switch button { padding: 0; border: 0; background: transparent; color: #087c70; font-weight: 700; }
+.customer-status { min-height: 18px; margin: 0; color: var(--muted); font-size: 12px; }
+.customer-account-heading, .customer-orders-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.customer-account-heading { margin-bottom: 28px; }
+.customer-account-heading h1, .customer-orders-heading h2 { margin-bottom: 0; }
+.customer-profile-card { padding: clamp(20px, 4vw, 30px); }
+.customer-profile-card h2, .customer-orders-heading h2 { font: 700 clamp(20px, 3vw, 27px) Manrope, sans-serif; letter-spacing: -.7px; }
+.customer-profile-card dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 18px 0 0; }
+.customer-profile-card dl div { min-width: 0; }
+.customer-profile-card dt { margin-bottom: 5px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .7px; }
+.customer-profile-card dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; font-weight: 700; }
+.customer-orders-section { margin-top: 40px; }
+.customer-orders-heading { margin-bottom: 18px; }
+.customer-orders-heading label { min-width: min(220px, 48%); }
+.customer-orders-list { display: grid; gap: 14px; }
+.customer-order-card { padding: clamp(16px, 3vw, 24px); box-shadow: none; }
+.customer-order-top { display: flex; justify-content: space-between; gap: 16px; padding-bottom: 13px; border-bottom: 1px solid var(--line); }
+.customer-order-top strong { font: 700 15px Manrope, sans-serif; overflow-wrap: anywhere; }
+.customer-order-top time, .customer-order-meta, .customer-order-items { color: var(--muted); font-size: 11px; }
+.customer-order-items { display: grid; gap: 6px; padding: 14px 0; }
+.customer-order-meta { display: flex; flex-wrap: wrap; gap: 8px 20px; padding-top: 12px; border-top: 1px solid var(--line); }
+.customer-order-meta strong { color: var(--ink); }
+.customer-empty { padding: 25px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); text-align: center; font-size: 13px; }
+@media (max-width: 600px) {
+  .customer-profile-card dl { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .customer-orders-heading { align-items: stretch; flex-direction: column; }
+  .customer-orders-heading label { width: 100%; }
+  .customer-account-heading { align-items: start; }
+  .customer-order-top { flex-direction: column; gap: 6px; }
+}

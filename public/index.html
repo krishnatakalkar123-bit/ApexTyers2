@@ -53,6 +53,7 @@
         <button class="utility-pill utility-sell" type="button" data-open-quote><svg class="utility-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h18v13H3zM7 7V4h10v3M3 12h18"/><path d="M10 12v2h4v-2"/></svg><span>Sell Tyres</span><span class="utility-arrow" aria-hidden="true">↗</span></button>
         <a class="utility-pill utility-link" href="#contact" data-view-link="contact"><svg class="utility-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9a2.5 2.5 0 1 1 4.2 1.8c-1.1 1-1.8 1.4-1.8 3M12 17.2v.1"/></svg><span>Help Support</span></a>
         <button class="utility-pill utility-action" type="button" data-open-quote><svg class="utility-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v9a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4.5a2.5 2.5 0 0 1-1-2z"/><path d="M8 8h8M8 12h6"/></svg><span>Messages</span></button>
+        <button class="utility-pill utility-link" id="customer-account-nav" type="button" data-view-link="customer-login"><span class="account-badge" aria-hidden="true">●</span><span class="account-copy"><strong>Customer</strong><small>Sign In / Register</small></span></button>
         <button class="utility-pill utility-account" type="button" data-open-owner><span class="account-badge"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10V7a7 7 0 0 1 14 0v3M4 10h16v11H4z"/><circle cx="12" cy="15" r="1"/></svg></span><span class="account-copy"><strong>Sign In</strong><small>Owner Login</small></span><span class="account-arrow" aria-hidden="true">↗</span></button>
       </div>
     </div>
@@ -213,10 +214,89 @@
         <a class="community-follow-button" href="https://www.instagram.com/apex.tyreworx?utm_source=ig_web_button_share_sheet&amp;dlrf=ZDNlZDc0MzIxNw==" target="_blank" rel="noopener noreferrer">Follow on Instagram <span aria-hidden="true">↗</span></a>
       </div>
     </section>
+
+    <section class="view-panel market-container customer-view" data-view-panel="customer-register" hidden>
+      <div class="customer-card">
+        <p class="market-kicker">CREATE YOUR APEXTYRE ACCOUNT</p>
+        <h1>Create your account</h1>
+        <p class="customer-intro">Register with your email address and verify it to access your orders.</p>
+        <form id="customer-register-form" class="customer-form">
+          <label>Full name<input name="fullName" autocomplete="name" minlength="2" maxlength="100" required></label>
+          <label>Email address<input name="email" type="email" autocomplete="email" maxlength="254" required></label>
+          <label>Mobile number<input name="mobileNumber" type="tel" autocomplete="tel" minlength="8" maxlength="20" required></label>
+          <label>Password<input name="password" type="password" autocomplete="new-password" minlength="12" required><small>Use at least 12 characters.</small></label>
+          <label>Confirm password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required></label>
+          <p class="form-error" id="customer-register-error" role="alert"></p>
+          <button class="hero-primary" type="submit">Create account</button>
+        </form>
+        <p class="customer-switch">Already registered? <button type="button" data-view-link="customer-login">Sign in</button></p>
+      </div>
+    </section>
+
+    <section class="view-panel market-container customer-view" data-view-panel="customer-verify" hidden>
+      <div class="customer-card">
+        <p class="market-kicker">EMAIL VERIFICATION</p>
+        <h1>Verify your email</h1>
+        <p class="customer-intro">Enter the six-digit code sent to your email. The code expires after five minutes.</p>
+        <form id="customer-verify-form" class="customer-form">
+          <label>Email address<input name="email" type="email" autocomplete="email" maxlength="254" required></label>
+          <label>Six-digit code<input name="otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required></label>
+          <p class="form-error" id="customer-verify-error" role="alert"></p>
+          <button class="hero-primary" type="submit">Verify email</button>
+          <button class="customer-secondary" id="customer-resend-otp" type="button">Resend code</button>
+          <p class="customer-status" id="customer-resend-status" aria-live="polite"></p>
+        </form>
+        <p class="customer-switch">Already verified? <button type="button" data-view-link="customer-login">Sign in</button></p>
+      </div>
+    </section>
+
+    <section class="view-panel market-container customer-view" data-view-panel="customer-login" hidden>
+      <div class="customer-card">
+        <p class="market-kicker">CUSTOMER ACCOUNT</p>
+        <h1>Sign in</h1>
+        <p class="customer-intro">Sign in with the email address you verified.</p>
+        <form id="customer-login-form" class="customer-form">
+          <label>Email address<input name="email" type="email" autocomplete="username" maxlength="254" required></label>
+          <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+          <p class="form-error" id="customer-login-error" role="alert"></p>
+          <button class="hero-primary" type="submit">Sign in</button>
+        </form>
+        <p class="customer-switch">New to ApexTyre? <button type="button" data-view-link="customer-register">Create an account</button></p>
+      </div>
+    </section>
+
+    <section class="view-panel market-container customer-view" data-view-panel="customer-account" hidden>
+      <div class="customer-account-heading">
+        <div><p class="market-kicker">MY APEXTYRE ACCOUNT</p><h1>My account</h1></div>
+        <button class="customer-secondary" id="customer-logout" type="button">Sign out</button>
+      </div>
+      <section class="customer-profile-card" aria-labelledby="customer-profile-title">
+        <h2 id="customer-profile-title">Profile details</h2>
+        <dl>
+          <div><dt>Name</dt><dd id="customer-profile-name"></dd></div>
+          <div><dt>Email</dt><dd id="customer-profile-email"></dd></div>
+          <div><dt>Mobile</dt><dd id="customer-profile-mobile"></dd></div>
+        </dl>
+      </section>
+      <section class="customer-orders-section" aria-labelledby="customer-orders-title">
+        <div class="customer-orders-heading"><div><p class="market-kicker">ORDER HISTORY</p><h2 id="customer-orders-title">My orders</h2></div>
+          <label>Show orders
+            <select id="customer-order-filter">
+              <option value="all">All Orders</option>
+              <option value="pending">Pending Approval</option>
+              <option value="approved">Approved</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </label>
+        </div>
+        <p class="customer-status" id="customer-orders-status" aria-live="polite"></p>
+        <div class="customer-orders-list" id="customer-orders-list" aria-live="polite"></div>
+      </section>
+    </section>
   </main>
 
   <footer class="market-footer">
-    <div class="market-container footer-main"><a class="market-logo footer-logo" href="#home" data-view-link="home"><span class="logo-mark" aria-hidden="true">△</span><span>apexTyre<small>.com</small></span></a><p>Better fitment starts with a better choice.</p><div><button type="button" data-view-link="about">About us</button><button type="button" data-view-link="contact">Contact</button><button type="button" data-view-link="community">Community</button><button type="button" data-open-owner>Owner login</button></div></div>
+    <div class="market-container footer-main"><a class="market-logo footer-logo" href="#home" data-view-link="home"><span class="logo-mark" aria-hidden="true">△</span><span>apexTyre<small>.com</small></span></a><p>Better fitment starts with a better choice.</p><div><button type="button" data-view-link="about">About us</button><button type="button" data-view-link="contact">Contact</button><button type="button" data-view-link="community">Community</button><button type="button" data-view-link="customer-login">Customer account</button><button type="button" data-open-owner>Owner login</button></div></div>
     <div class="market-container footer-legal"><span>© <span id="current-year"></span> ApexTyre. Product prices and availability may vary; confirm details with our team.</span><span>Built for the road ahead.</span></div>
     <div class="market-container footer-credit">© 2026 apexTyre.com | Designed &amp; Developed by Krishna Takalkar (KT SOLUTION). All Rights Reserved.</div>
   </footer>

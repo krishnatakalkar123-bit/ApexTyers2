@@ -53,6 +53,10 @@ const ownerForm = document.querySelector('#owner-form');
 const toast = document.querySelector('#toast');
 const themeToggle = document.querySelector('#theme-toggle');
 const themeIcon = themeToggle.querySelector('[data-theme-icon]');
+const customerRegisterForm = document.querySelector('#customer-register-form');
+const customerVerifyForm = document.querySelector('#customer-verify-form');
+const customerLoginForm = document.querySelector('#customer-login-form');
+const customerAccountNav = document.querySelector('#customer-account-nav');
 const themeStorageKey = 'theme';
 
 const supplierPhone = '+918999210727';
@@ -103,6 +107,7 @@ let customerOrderPollTimer;
 let cartItems = [];
 let checkoutItems = [];
 let checkoutSource = 'single';
+let currentCustomer = null;
 
 function applyTheme(theme) {
   const activeTheme = theme === 'light' ? 'light' : 'dark';
@@ -345,8 +350,103 @@ function showToast(message) {
   toastTimer = window.setTimeout(() => toast.classList.remove('visible'), 5000);
 }
 
+async function customerApi(path, options = {}) {
+  const response = await apiFetch(path, options);
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || 'The customer account request could not be completed.');
+  return result;
+}
+
+function customerJsonRequest(method, payload) {
+  return {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  };
+}
+
+function showCustomerProfile(customer) {
+  currentCustomer = customer;
+  document.querySelector('#customer-profile-name').textContent = customer.fullName || '';
+  document.querySelector('#customer-profile-email').textContent = customer.email || '';
+  document.querySelector('#customer-profile-mobile').textContent = customer.mobileNumber || '';
+  customerAccountNav.dataset.viewLink = 'customer-account';
+  customerAccountNav.querySelector('strong').textContent = 'My Account';
+  customerAccountNav.querySelector('small').textContent = customer.fullName || 'Customer';
+}
+
+async function loadCustomerOrders() {
+  const ordersStatus = document.querySelector('#customer-orders-status');
+  const ordersList = document.querySelector('#customer-orders-list');
+  const filter = document.querySelector('#customer-order-filter').value;
+  ordersStatus.textContent = 'Loading your orders…';
+  ordersList.replaceChildren();
+  try {
+    const result = await customerApi(`/api/customer/orders?filter=${encodeURIComponent(filter)}`);
+    const orders = Array.isArray(result.orders) ? result.orders : [];
+    ordersStatus.textContent = '';
+    if (!orders.length) {
+      ordersList.innerHTML = '<p class="customer-empty">No orders match this filter.</p>';
+      return;
+    }
+
+    ordersList.innerHTML = orders.map((order) => {
+      const items = Array.isArray(order.items) ? order.items : [];
+      const itemMarkup = items.map((item) =>
+        `<div>${safe(item.brand)} ${safe(item.model)} (${safe(item.tyreSize)}) · Qty ${safe(item.quantity)} · ${exactMoney.format(Number(item.subtotal) || 0)}</div>`
+      ).join('');
+      const orderDate = new Date(order.created_at);
+      const dateText = Number.isNaN(orderDate.getTime())
+        ? ''
+        : orderDate.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+      return `<article class="customer-order-card">
+        <div class="customer-order-top">
+          <strong>Order ${safe(order.order_code || order.id)}</strong>
+          <time>${safe(dateText)}</time>
+        </div>
+        <div class="customer-order-items">${itemMarkup || '<div>Order details unavailable.</div>'}</div>
+        <div class="customer-order-meta">
+          <span>Approval: <strong>${safe(order.approval_status)}</strong></span>
+          <span>Order status: <strong>${safe(order.status)}</strong></span>
+          <span>Subtotal: <strong>${exactMoney.format(Number(order.subtotal_amount) || 0)}</strong></span>
+          <span>GST: <strong>${exactMoney.format(Number(order.gst_amount) || 0)}</strong></span>
+          <span>Delivery: <strong>${exactMoney.format(Number(order.delivery_amount) || 0)}</strong></span>
+          <span>Total: <strong>${exactMoney.format(Number(order.total_amount) || 0)}</strong></span>
+        </div>
+      </article>`;
+    }).join('');
+  } catch (error) {
+    ordersStatus.textContent = error.message;
+  }
+}
+
+async function openCustomerAccount() {
+  try {
+    const result = await customerApi('/api/customer/me');
+    showCustomerProfile(result.customer);
+    switchTab('customer-account');
+    await loadCustomerOrders();
+  } catch (error) {
+    currentCustomer = null;
+    switchTab('customer-login');
+    showToast(error.message || 'Sign in to view your account.');
+  }
+}
+
+async function refreshCustomerSession() {
+  try {
+    const result = await customerApi('/api/customer/me');
+    showCustomerProfile(result.customer);
+  } catch {
+    currentCustomer = null;
+  }
+}
+
 function switchTab(viewName) {
-  const allowedViews = ['home', 'about', 'contact', 'community'];
+  const allowedViews = [
+    'home', 'about', 'contact', 'community',
+    'customer-register', 'customer-verify', 'customer-login', 'customer-account'
+  ];
   const view = allowedViews.includes(viewName) ? viewName : 'home';
   document.querySelectorAll('[data-view-panel]').forEach((panel) => {
     panel.hidden = panel.dataset.viewPanel !== view;
@@ -808,10 +908,142 @@ document.querySelector('#header-search').addEventListener('submit', (event) => {
   document.querySelector('#tyres').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
+customerRegisterForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const errorElement = document.querySelector('#customer-register-error');
+  const submitButton = customerRegisterForm.querySelector('[type="submit"]');
+  const originalLabel = submitButton.textContent;
+  errorElement.textContent = '';
+  submitButton.disabled = true;
+  submitButton.textContent = 'Creating account…';
+  const form = new FormData(customerRegisterForm);
+  const email = String(form.get('email') || '').trim().toLowerCase();
+  try {
+    const result = await customerApi(
+      '/api/customer/register',
+      customerJsonRequest('POST', Object.fromEntries(form.entries()))
+    );
+    customerVerifyForm.elements.email.value = email;
+    customerVerifyForm.elements.otp.value = '';
+    document.querySelector('#customer-resend-status').textContent = result.message;
+    customerRegisterForm.reset();
+    switchTab('customer-verify');
+  } catch (error) {
+    errorElement.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalLabel;
+  }
+});
+
+customerVerifyForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const errorElement = document.querySelector('#customer-verify-error');
+  const submitButton = customerVerifyForm.querySelector('[type="submit"]');
+  const originalLabel = submitButton.textContent;
+  errorElement.textContent = '';
+  submitButton.disabled = true;
+  submitButton.textContent = 'Verifying email…';
+  const form = new FormData(customerVerifyForm);
+  try {
+    const result = await customerApi(
+      '/api/customer/verify-email',
+      customerJsonRequest('POST', Object.fromEntries(form.entries()))
+    );
+    customerLoginForm.elements.email.value = String(form.get('email') || '').trim().toLowerCase();
+    customerVerifyForm.reset();
+    switchTab('customer-login');
+    showToast(result.message);
+  } catch (error) {
+    errorElement.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalLabel;
+  }
+});
+
+document.querySelector('#customer-resend-otp').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  const originalLabel = button.textContent;
+  const status = document.querySelector('#customer-resend-status');
+  const email = customerVerifyForm.elements.email.value.trim().toLowerCase();
+  status.textContent = '';
+  button.disabled = true;
+  button.textContent = 'Sending…';
+  try {
+    const result = await customerApi(
+      '/api/customer/resend-otp',
+      customerJsonRequest('POST', { email })
+    );
+    status.textContent = result.message;
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+});
+
+customerLoginForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const errorElement = document.querySelector('#customer-login-error');
+  const submitButton = customerLoginForm.querySelector('[type="submit"]');
+  const originalLabel = submitButton.textContent;
+  errorElement.textContent = '';
+  submitButton.disabled = true;
+  submitButton.textContent = 'Signing in…';
+  const form = new FormData(customerLoginForm);
+  try {
+    await customerApi(
+      '/api/customer/login',
+      customerJsonRequest('POST', Object.fromEntries(form.entries()))
+    );
+    const result = await customerApi('/api/customer/me');
+    showCustomerProfile(result.customer);
+    customerLoginForm.elements.password.value = '';
+    switchTab('customer-account');
+    await loadCustomerOrders();
+  } catch (error) {
+    errorElement.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalLabel;
+  }
+});
+
+document.querySelector('#customer-logout').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Signing out…';
+  try {
+    const result = await customerApi('/api/customer/logout', customerJsonRequest('POST', {}));
+    currentCustomer = null;
+    customerAccountNav.dataset.viewLink = 'customer-login';
+    customerAccountNav.querySelector('strong').textContent = 'Customer';
+    customerAccountNav.querySelector('small').textContent = 'Sign In / Register';
+    switchTab('customer-login');
+    showToast(result.message);
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+});
+
+document.querySelector('#customer-order-filter').addEventListener('change', () => {
+  if (currentCustomer) void loadCustomerOrders();
+});
+
 document.querySelectorAll('[data-view-link]').forEach((link) => {
   link.addEventListener('click', (event) => {
     event.preventDefault();
-    switchTab(link.dataset.viewLink);
+    if (link.dataset.viewLink === 'customer-account') {
+      void openCustomerAccount();
+    } else {
+      switchTab(link.dataset.viewLink);
+    }
   });
 });
 themeToggle.addEventListener('click', () => {
@@ -949,6 +1181,7 @@ document.querySelector('#current-year').textContent = new Date().getFullYear();
 
 cartItems = restoreCart();
 renderCart();
+void refreshCustomerSession();
 loadProducts();
 loadStorefrontSettings();
 window.setInterval(() => {
