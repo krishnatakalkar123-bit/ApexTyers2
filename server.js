@@ -21,42 +21,9 @@ const DELIVERY_CHARGE = 99;
 const OWNER_EMAIL_FALLBACK = 'swapnilnarwade73@gmail.com';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const EMAIL_FROM = process.env.EMAIL_FROM || '';
-const CUSTOMER_OTP_HMAC_SECRET = process.env.CUSTOMER_OTP_HMAC_SECRET || '';
 const BUSINESS_GSTIN = process.env.BUSINESS_GSTIN || '';
 const BUSINESS_ADDRESS = process.env.BUSINESS_ADDRESS || '';
 const catalogProductsByKey = new Map(catalogProducts.map((product) => [product.catalog_key, product]));
-
-function readPositiveIntegerConfig(name, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
-  const rawValue = process.env[name];
-  if (rawValue === undefined || rawValue === '') return fallback;
-  if (!/^\d+$/.test(rawValue)) {
-    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
-  }
-  const value = Number(rawValue);
-  if (!Number.isSafeInteger(value) || value < min || value > max) {
-    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
-  }
-  return value;
-}
-
-const CUSTOMER_OTP_EXPIRY_SECONDS = readPositiveIntegerConfig(
-  'CUSTOMER_OTP_EXPIRY_SECONDS', 300, { min: 60, max: 3600 }
-);
-const CUSTOMER_OTP_RESEND_COOLDOWN_SECONDS = readPositiveIntegerConfig(
-  'CUSTOMER_OTP_RESEND_COOLDOWN_SECONDS', 60, { max: 86400 }
-);
-const CUSTOMER_OTP_RESEND_WINDOW_SECONDS = readPositiveIntegerConfig(
-  'CUSTOMER_OTP_RESEND_WINDOW_SECONDS', 3600, { max: 604800 }
-);
-const CUSTOMER_OTP_RESEND_WINDOW_LIMIT = readPositiveIntegerConfig(
-  'CUSTOMER_OTP_RESEND_WINDOW_LIMIT', 5, { max: 100 }
-);
-if (CUSTOMER_OTP_RESEND_COOLDOWN_SECONDS > CUSTOMER_OTP_RESEND_WINDOW_SECONDS) {
-  throw new Error('CUSTOMER_OTP_RESEND_COOLDOWN_SECONDS cannot exceed CUSTOMER_OTP_RESEND_WINDOW_SECONDS.');
-}
-if (Buffer.byteLength(CUSTOMER_OTP_HMAC_SECRET, 'utf8') < 32) {
-  throw new Error('Set a unique 32-byte or longer CUSTOMER_OTP_HMAC_SECRET in the backend environment.');
-}
 
 if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.length < 32) {
   throw new Error('SESSION_SECRET must contain at least 32 characters.');
@@ -94,15 +61,6 @@ async function sendResendEmail(message) {
   }
 }
 
-function createCustomerOtpDigest(customerId, otp) {
-  if (!Number.isSafeInteger(Number(customerId)) || Number(customerId) < 1 || !/^\d{6}$/.test(otp)) {
-    throw new Error('Customer OTP digest input is invalid.');
-  }
-  return crypto.createHmac('sha256', CUSTOMER_OTP_HMAC_SECRET)
-    .update(`${customerId}:${otp}`, 'utf8')
-    .digest();
-}
-
 function generateCustomerSessionToken() {
   return crypto.randomBytes(32).toString('base64url');
 }
@@ -132,22 +90,6 @@ function setCustomerSessionCookie(res, token) {
 function clearCustomerSessionCookie(res) {
   const { maxAge, ...clearOptions } = CUSTOMER_SESSION_COOKIE_OPTIONS;
   res.clearCookie(CUSTOMER_SESSION_COOKIE, clearOptions);
-}
-
-async function sendCustomerOtpEmail(recipient, otp) {
-  if (!RESEND_API_KEY || !EMAIL_FROM) {
-    throw new Error('Customer email delivery is not configured.');
-  }
-  if (!isValidEmail(recipient) || !/^\d{6}$/.test(otp)) {
-    throw new Error('Customer OTP email input is invalid.');
-  }
-  await sendResendEmail({
-    recipient,
-    subject: 'Your ApexTyre email verification code',
-    html: `<p>Your ApexTyre verification code is <strong>${escapeHtml(otp)}</strong>.</p>
-      <p>This code expires in ${Math.ceil(CUSTOMER_OTP_EXPIRY_SECONDS / 60)} minutes. Do not share it with anyone.</p>`,
-    text: `Your ApexTyre verification code is ${otp}. It expires in ${Math.ceil(CUSTOMER_OTP_EXPIRY_SECONDS / 60)} minutes. Do not share it with anyone.`
-  });
 }
 
 async function sendOrderApprovalEmail(order) {
@@ -480,8 +422,7 @@ async function requireCustomerSession(req, res, next) {
        JOIN public.customer_accounts AS account ON account.id = session.customer_id
        WHERE session.token_hash = $1
          AND session.revoked_at IS NULL
-         AND session.expires_at > CURRENT_TIMESTAMP
-         AND account.email_verified = TRUE`,
+         AND session.expires_at > CURRENT_TIMESTAMP`,
       [tokenHash]
     );
     if (!customer) return sendJsonError(res, 401, 'Please sign in to access your customer account.');
@@ -512,8 +453,7 @@ async function loadOptionalCustomerSession(req, res, next) {
        JOIN public.customer_accounts AS account ON account.id = session.customer_id
        WHERE session.token_hash = $1
          AND session.revoked_at IS NULL
-         AND session.expires_at > CURRENT_TIMESTAMP
-         AND account.email_verified = TRUE`,
+         AND session.expires_at > CURRENT_TIMESTAMP`,
       [tokenHash]
     ) || null;
     next();
@@ -569,8 +509,6 @@ function createCustomerRateLimiter({ maxRequests, windowMs }) {
 
 const customerRateLimiters = Object.freeze({
   register: createCustomerRateLimiter({ maxRequests: 5, windowMs: 15 * 60 * 1000 }),
-  verifyEmail: createCustomerRateLimiter({ maxRequests: 10, windowMs: 15 * 60 * 1000 }),
-  resendOtp: createCustomerRateLimiter({ maxRequests: 5, windowMs: 60 * 60 * 1000 }),
   login: createCustomerRateLimiter({ maxRequests: 10, windowMs: 15 * 60 * 1000 })
 });
 
@@ -647,244 +585,35 @@ app.post(
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const mobileNumber = typeof body.mobileNumber === 'string' ? body.mobileNumber.trim() : '';
     const password = typeof body.password === 'string' ? body.password : '';
-    const confirmPassword = typeof body.confirmPassword === 'string' ? body.confirmPassword : '';
     if (fullName.length < 2 || fullName.length > 100 ||
         !email || email.length > 254 || !isValidEmail(email) ||
         !/^(?=.*\d)[0-9+() -]{8,20}$/.test(mobileNumber) ||
-        password.length < 12 || Buffer.byteLength(password, 'utf8') > 72 ||
-        password !== confirmPassword) {
+        password.length < 12 || Buffer.byteLength(password, 'utf8') > 72) {
       return sendJsonError(res, 400, 'Check your name, email, mobile number, and password requirements.');
-    }
-    if (!RESEND_API_KEY || !EMAIL_FROM) {
-      return sendJsonError(res, 503, 'Email verification is temporarily unavailable.');
     }
 
     try {
       const passwordHash = await bcrypt.hash(password, 12);
-      const otp = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
-      const registration = await withTransaction(async (client) => {
-        const account = await get(
+      await withTransaction(async (client) => {
+        await get(
           `INSERT INTO public.customer_accounts
-             (full_name, email, mobile_number, password_hash)
-           VALUES ($1, $2, $3, $4)
+             (full_name, email, mobile_number, password_hash, email_verified)
+           VALUES ($1, $2, $3, $4, FALSE)
            RETURNING id`,
           [fullName, email, mobileNumber, passwordHash],
           client
         );
-        const otpHash = createCustomerOtpDigest(account.id, otp);
-        await run(
-          `INSERT INTO public.customer_email_otps
-             (customer_id, otp_hash, expires_at, attempts, resend_available_at,
-              resend_count, resend_window_started_at)
-           VALUES (
-             $1, $2,
-             CURRENT_TIMESTAMP + ($3::integer * INTERVAL '1 second'),
-             0,
-             CURRENT_TIMESTAMP + ($4::integer * INTERVAL '1 second'),
-             0,
-             CURRENT_TIMESTAMP
-           )`,
-          [
-            account.id,
-            otpHash,
-            CUSTOMER_OTP_EXPIRY_SECONDS,
-            CUSTOMER_OTP_RESEND_COOLDOWN_SECONDS
-          ],
-          client
-        );
-        return { otp };
       });
 
-      setImmediate(() => {
-        void sendCustomerOtpEmail(email, registration.otp).catch((error) => {
-          const detail = Number.isInteger(error?.status) ? `HTTP ${error.status}` : 'network or timeout error';
-          console.error(`Could not send customer verification email (${detail}).`);
-        });
-      });
       return res.status(202).json({
-        message: 'If registration can proceed, a verification code will be sent to that email address.'
+        message: 'If registration can proceed, you can sign in using that email and password.'
       });
     } catch (error) {
       if (error.code === '23505' && error.constraint === 'customer_accounts_email_key') {
         return res.status(202).json({
-          message: 'If registration can proceed, a verification code will be sent to that email address.'
+          message: 'If registration can proceed, you can sign in using that email and password.'
         });
       }
-      return next(error);
-    }
-  }
-);
-
-app.post(
-  '/api/customer/verify-email',
-  requireCustomerRequestOrigin,
-  customerRateLimiters.verifyEmail,
-  async (req, res, next) => {
-    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
-    const otp = typeof req.body?.otp === 'string' ? req.body.otp.trim() : '';
-    if (!email || email.length > 254 || !isValidEmail(email) || !/^\d{6}$/.test(otp)) {
-      return sendJsonError(res, 400, 'Enter a valid email address and six-digit verification code.');
-    }
-
-    try {
-      const verification = await withTransaction(async (client) => {
-        const account = await get(
-          `SELECT id, email_verified
-           FROM public.customer_accounts
-           WHERE email = $1
-           FOR UPDATE`,
-          [email],
-          client
-        );
-        if (!account || account.email_verified) return { result: 'invalid' };
-
-        const challenge = await get(
-          `SELECT otp_hash, expires_at, attempts, consumed_at,
-                  expires_at <= CURRENT_TIMESTAMP AS expired
-           FROM public.customer_email_otps
-           WHERE customer_id = $1
-           FOR UPDATE`,
-          [account.id],
-          client
-        );
-        if (!challenge) return { result: 'invalid' };
-        if (challenge.attempts >= 5 || challenge.consumed_at) return { result: 'locked' };
-        if (challenge.expired) return { result: 'expired' };
-
-        const suppliedDigest = createCustomerOtpDigest(account.id, otp);
-        const matches = Buffer.isBuffer(challenge.otp_hash) &&
-          challenge.otp_hash.length === suppliedDigest.length &&
-          crypto.timingSafeEqual(challenge.otp_hash, suppliedDigest);
-        if (!matches) {
-          const updated = await get(
-            `UPDATE public.customer_email_otps
-             SET attempts = attempts + 1,
-                 consumed_at = CASE
-                   WHEN attempts + 1 >= 5 THEN CURRENT_TIMESTAMP
-                   ELSE consumed_at
-                 END
-             WHERE customer_id = $1
-             RETURNING attempts`,
-            [account.id],
-            client
-          );
-          return { result: updated.attempts >= 5 ? 'locked' : 'invalid' };
-        }
-
-        await run(
-          `UPDATE public.customer_accounts
-           SET email_verified = TRUE, email_verified_at = CURRENT_TIMESTAMP,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1 AND email_verified = FALSE`,
-          [account.id],
-          client
-        );
-        await run(
-          `UPDATE public.customer_email_otps
-           SET consumed_at = CURRENT_TIMESTAMP
-           WHERE customer_id = $1 AND consumed_at IS NULL`,
-          [account.id],
-          client
-        );
-        return { result: 'verified' };
-      });
-
-      if (verification.result === 'verified') {
-        return res.json({ message: 'Email verified. You can now sign in.' });
-      }
-      if (verification.result === 'expired') {
-        return sendJsonError(res, 400, 'This verification code has expired. Request a new code.');
-      }
-      if (verification.result === 'locked') {
-        return sendJsonError(res, 429, 'This verification code can no longer be used. Request a new code.');
-      }
-      return sendJsonError(res, 400, 'The email address or verification code is invalid.');
-    } catch (error) {
-      return next(error);
-    }
-  }
-);
-
-app.post(
-  '/api/customer/resend-otp',
-  requireCustomerRequestOrigin,
-  customerRateLimiters.resendOtp,
-  async (req, res, next) => {
-    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
-    if (!email || email.length > 254 || !isValidEmail(email)) {
-      return sendJsonError(res, 400, 'Enter a valid email address.');
-    }
-    if (!RESEND_API_KEY || !EMAIL_FROM) {
-      return sendJsonError(res, 503, 'Email verification is temporarily unavailable.');
-    }
-
-    try {
-      const resend = await withTransaction(async (client) => {
-        const account = await get(
-          `SELECT id, email_verified
-           FROM public.customer_accounts
-           WHERE email = $1
-           FOR UPDATE`,
-          [email],
-          client
-        );
-        if (!account || account.email_verified) return null;
-
-        const challenge = await get(
-          `SELECT resend_count,
-                  resend_available_at > CURRENT_TIMESTAMP AS cooldown_active,
-                  resend_window_started_at <=
-                    CURRENT_TIMESTAMP - ($2::integer * INTERVAL '1 second') AS window_expired
-           FROM public.customer_email_otps
-           WHERE customer_id = $1
-           FOR UPDATE`,
-          [account.id, CUSTOMER_OTP_RESEND_WINDOW_SECONDS],
-          client
-        );
-        if (!challenge || challenge.cooldown_active) return null;
-        const windowExpired = challenge.window_expired;
-        if (!windowExpired && challenge.resend_count >= CUSTOMER_OTP_RESEND_WINDOW_LIMIT) {
-          return null;
-        }
-
-        const otp = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
-        const otpHash = createCustomerOtpDigest(account.id, otp);
-        const updated = await run(
-          `UPDATE public.customer_email_otps
-           SET otp_hash = $2,
-               expires_at = CURRENT_TIMESTAMP + ($3::integer * INTERVAL '1 second'),
-               attempts = 0,
-               resend_available_at = CURRENT_TIMESTAMP + ($4::integer * INTERVAL '1 second'),
-               resend_count = CASE WHEN $5 THEN 1 ELSE resend_count + 1 END,
-               resend_window_started_at =
-                 CASE WHEN $5 THEN CURRENT_TIMESTAMP ELSE resend_window_started_at END,
-               consumed_at = NULL
-           WHERE customer_id = $1`,
-          [
-            account.id,
-            otpHash,
-            CUSTOMER_OTP_EXPIRY_SECONDS,
-            CUSTOMER_OTP_RESEND_COOLDOWN_SECONDS,
-            windowExpired
-          ],
-          client
-        );
-        if (updated.changes !== 1) return null;
-        return { otp };
-      });
-
-      if (resend) {
-        setImmediate(() => {
-          void sendCustomerOtpEmail(email, resend.otp).catch((error) => {
-            const detail = Number.isInteger(error?.status) ? `HTTP ${error.status}` : 'network or timeout error';
-            console.error(`Could not send customer verification email (${detail}).`);
-          });
-        });
-      }
-      return res.status(202).json({
-        message: 'If the email address has a pending verification, a new code will be sent when eligible.'
-      });
-    } catch (error) {
       return next(error);
     }
   }
@@ -904,7 +633,7 @@ app.post(
 
     try {
       const account = await get(
-        `SELECT id, password_hash, email_verified
+        `SELECT id, password_hash
          FROM public.customer_accounts
          WHERE email = $1`,
         [email]
@@ -912,7 +641,7 @@ app.post(
       const passwordMatches = account
         ? await bcrypt.compare(password, account.password_hash)
         : false;
-      if (!account || !account.email_verified || !passwordMatches) {
+      if (!account || !passwordMatches) {
         return sendJsonError(res, 401, 'Email or password is incorrect.');
       }
 

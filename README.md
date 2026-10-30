@@ -110,6 +110,11 @@ The SQLite importer uses `sqlite3`, which is a development dependency because th
 | GET | `/api/products` | Public | Fetch the tyre catalog |
 | GET | `/api/storefront-settings` | Public | Read the owner-published festival ticker message |
 | POST | `/api/place-order` | Public | Save a uniquely numbered pending single-tyre or multi-item order, reserve stock and email the owner |
+| POST | `/api/customer/register` | Public, origin-checked, rate-limited | Create an unverified customer account immediately; no verification email is sent |
+| POST | `/api/customer/login` | Public, origin-checked, rate-limited | Sign in with a registered email and password using an HttpOnly session cookie |
+| POST | `/api/customer/logout` | Origin-checked | Revoke the current customer session and clear its cookie |
+| GET | `/api/customer/me` | Customer session | Return the signed-in customer's profile |
+| GET | `/api/customer/orders?filter=all` | Customer session | Return only that customer's orders; filters: `all`, `pending`, `approved`, `cancelled` |
 | GET | `/api/orders/:orderCode/status` | Public order token | Check approval state for the matching order |
 | GET | `/api/orders/:orderCode/invoice` | Owner session or order token | Download the approved order's PDF invoice |
 | POST | `/api/admin/login` | Public, rate-limited | Sign in with `ADMIN_USERNAME` and `ADMIN_PASSWORD` |
@@ -138,3 +143,27 @@ After an order is committed to PostgreSQL, the backend sends an itemized order r
 COD, UPI and online payment selections are recorded, but this starter does **not** collect payment or mark UPI/online orders as paid. Connect a payment provider and verify its server-side webhook before treating an online order as paid.
 
 For production, deploy behind HTTPS, configure a strong unique `SESSION_SECRET` and owner password, use a Resend-verified sender address, and use Neon backup/restore procedures for PostgreSQL.
+
+## Customer accounts
+
+The customer account pages are available from the storefront's Customer account link. Registration requires a full name, email, mobile number, and password. Email addresses are trimmed and lowercased; passwords are bcrypt-hashed. Accounts are created immediately without sending verification emails. `email_verified` remains false for newly registered accounts; it is not automatically changed, and it does not prevent login. Customer sessions use random tokens in Secure/HttpOnly cookies; only SHA-256 token hashes are persisted. Orders are selected by the authenticated server-side customer ID, never by a customer ID supplied by the browser.
+
+The existing one-time migration includes OTP-support schema from the earlier account design. The current application does not create, read, or update those OTP records; leave the schema and existing account data intact.
+
+### One-time database migration
+
+The customer account tables and nullable `orders.customer_id` are **not** created by normal application startup. Before enabling customer accounts, review and back up the target PostgreSQL database, then apply [001_customer_accounts.sql](./scripts/migrations/001_customer_accounts.sql) once to the intended database using a trusted PostgreSQL client. For example, from this project directory after setting `DATABASE_URL` in the local shell (do not put its value in a command transcript):
+
+```powershell
+psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f .\scripts\migrations\001_customer_accounts.sql
+```
+
+Do not rerun this one-time migration after success. No existing guest orders are linked automatically; the new foreign key remains null for them. If legacy guest orders need association later, require a separate safe proof-of-ownership process rather than matching an unverified email.
+
+### Resend sender setup
+
+Keep `RESEND_API_KEY` in Render/local backend environment variables only. Resend is used for order notifications, not customer registration or login. Use `EMAIL_FROM` with a sender domain verified in Resend. Resend test mode may restrict delivery to verified/test recipients; delivery to arbitrary customer addresses generally requires verifying a custom domain and completing the DNS records Resend provides. This repository cannot determine the current Resend account mode or domain verification state.
+
+### Customer account checks
+
+Run `npm run build` for JavaScript syntax checks and `npm test` for the backend customer-flow tests (they use an in-memory PostgreSQL adapter and do not contact Neon or Resend). For actual local database verification, apply the migration to a non-production PostgreSQL database first, configure the backend variables in `.env`, then run `npm start` and exercise registration, login, account orders, checkout, and logout from the storefront. Do not use production customer data for test accounts.

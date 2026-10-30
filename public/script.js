@@ -54,7 +54,6 @@ const toast = document.querySelector('#toast');
 const themeToggle = document.querySelector('#theme-toggle');
 const themeIcon = themeToggle.querySelector('[data-theme-icon]');
 const customerRegisterForm = document.querySelector('#customer-register-form');
-const customerVerifyForm = document.querySelector('#customer-verify-form');
 const customerLoginForm = document.querySelector('#customer-login-form');
 const customerAccountNav = document.querySelector('#customer-account-nav');
 const themeStorageKey = 'theme';
@@ -445,7 +444,7 @@ async function refreshCustomerSession() {
 function switchTab(viewName) {
   const allowedViews = [
     'home', 'about', 'contact', 'community',
-    'customer-register', 'customer-verify', 'customer-login', 'customer-account'
+    'customer-register', 'customer-login', 'customer-account'
   ];
   const view = allowedViews.includes(viewName) ? viewName : 'home';
   document.querySelectorAll('[data-view-panel]').forEach((panel) => {
@@ -923,35 +922,8 @@ customerRegisterForm.addEventListener('submit', async (event) => {
       '/api/customer/register',
       customerJsonRequest('POST', Object.fromEntries(form.entries()))
     );
-    customerVerifyForm.elements.email.value = email;
-    customerVerifyForm.elements.otp.value = '';
-    document.querySelector('#customer-resend-status').textContent = result.message;
+    customerLoginForm.elements.email.value = email;
     customerRegisterForm.reset();
-    switchTab('customer-verify');
-  } catch (error) {
-    errorElement.textContent = error.message;
-  } finally {
-    submitButton.disabled = false;
-    submitButton.textContent = originalLabel;
-  }
-});
-
-customerVerifyForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const errorElement = document.querySelector('#customer-verify-error');
-  const submitButton = customerVerifyForm.querySelector('[type="submit"]');
-  const originalLabel = submitButton.textContent;
-  errorElement.textContent = '';
-  submitButton.disabled = true;
-  submitButton.textContent = 'Verifying email…';
-  const form = new FormData(customerVerifyForm);
-  try {
-    const result = await customerApi(
-      '/api/customer/verify-email',
-      customerJsonRequest('POST', Object.fromEntries(form.entries()))
-    );
-    customerLoginForm.elements.email.value = String(form.get('email') || '').trim().toLowerCase();
-    customerVerifyForm.reset();
     switchTab('customer-login');
     showToast(result.message);
   } catch (error) {
@@ -959,28 +931,6 @@ customerVerifyForm.addEventListener('submit', async (event) => {
   } finally {
     submitButton.disabled = false;
     submitButton.textContent = originalLabel;
-  }
-});
-
-document.querySelector('#customer-resend-otp').addEventListener('click', async (event) => {
-  const button = event.currentTarget;
-  const originalLabel = button.textContent;
-  const status = document.querySelector('#customer-resend-status');
-  const email = customerVerifyForm.elements.email.value.trim().toLowerCase();
-  status.textContent = '';
-  button.disabled = true;
-  button.textContent = 'Sending…';
-  try {
-    const result = await customerApi(
-      '/api/customer/resend-otp',
-      customerJsonRequest('POST', { email })
-    );
-    status.textContent = result.message;
-  } catch (error) {
-    status.textContent = error.message;
-  } finally {
-    button.disabled = false;
-    button.textContent = originalLabel;
   }
 });
 

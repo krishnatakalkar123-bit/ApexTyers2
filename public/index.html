@@ -219,13 +219,12 @@
       <div class="customer-card">
         <p class="market-kicker">CREATE YOUR APEXTYRE ACCOUNT</p>
         <h1>Create your account</h1>
-        <p class="customer-intro">Register with your email address and verify it to access your orders.</p>
+        <p class="customer-intro">Create an account to view your profile and order history.</p>
         <form id="customer-register-form" class="customer-form">
           <label>Full name<input name="fullName" autocomplete="name" minlength="2" maxlength="100" required></label>
           <label>Email address<input name="email" type="email" autocomplete="email" maxlength="254" required></label>
           <label>Mobile number<input name="mobileNumber" type="tel" autocomplete="tel" minlength="8" maxlength="20" required></label>
           <label>Password<input name="password" type="password" autocomplete="new-password" minlength="12" required><small>Use at least 12 characters.</small></label>
-          <label>Confirm password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required></label>
           <p class="form-error" id="customer-register-error" role="alert"></p>
           <button class="hero-primary" type="submit">Create account</button>
         </form>
@@ -233,28 +232,11 @@
       </div>
     </section>
 
-    <section class="view-panel market-container customer-view" data-view-panel="customer-verify" hidden>
-      <div class="customer-card">
-        <p class="market-kicker">EMAIL VERIFICATION</p>
-        <h1>Verify your email</h1>
-        <p class="customer-intro">Enter the six-digit code sent to your email. The code expires after five minutes.</p>
-        <form id="customer-verify-form" class="customer-form">
-          <label>Email address<input name="email" type="email" autocomplete="email" maxlength="254" required></label>
-          <label>Six-digit code<input name="otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required></label>
-          <p class="form-error" id="customer-verify-error" role="alert"></p>
-          <button class="hero-primary" type="submit">Verify email</button>
-          <button class="customer-secondary" id="customer-resend-otp" type="button">Resend code</button>
-          <p class="customer-status" id="customer-resend-status" aria-live="polite"></p>
-        </form>
-        <p class="customer-switch">Already verified? <button type="button" data-view-link="customer-login">Sign in</button></p>
-      </div>
-    </section>
-
     <section class="view-panel market-container customer-view" data-view-panel="customer-login" hidden>
       <div class="customer-card">
         <p class="market-kicker">CUSTOMER ACCOUNT</p>
         <h1>Sign in</h1>
-        <p class="customer-intro">Sign in with the email address you verified.</p>
+        <p class="customer-intro">Sign in with your registered email address and password.</p>
         <form id="customer-login-form" class="customer-form">
           <label>Email address<input name="email" type="email" autocomplete="username" maxlength="254" required></label>
           <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
