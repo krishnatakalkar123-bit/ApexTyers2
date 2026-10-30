@@ -975,26 +975,14 @@ customerRegisterForm.addEventListener('submit', async (event) => {
     return;
   }
   try {
-    await customerApi(
+    const result = await customerApi(
       '/api/customer/register',
       customerJsonRequest('POST', Object.fromEntries(form.entries()))
     );
-    await customerApi(
-      '/api/customer/login',
-      customerJsonRequest('POST', { email, password })
-    );
-    const result = await customerApi('/api/customer/me');
-    showCustomerProfile(result.customer);
     customerLoginForm.elements.email.value = email;
-    customerLoginForm.elements.password.value = '';
     customerRegisterForm.reset();
-    if (resumePendingCheckout()) {
-      showToast('Your account is ready. Complete checkout to place your order.');
-    } else {
-      switchTab('customer-account');
-      await loadCustomerOrders();
-      showToast('Your account is ready and you are signed in.');
-    }
+    switchTab('customer-login');
+    showToast(result.message || 'If registration can proceed, sign in using that email and password.');
   } catch (error) {
     errorElement.textContent = error.message;
   } finally {

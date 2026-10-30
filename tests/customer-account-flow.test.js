@@ -249,12 +249,28 @@ test('storefront browsing and cart remain public, while checkout resumes after c
   const frontend = fs.readFileSync(path.join(__dirname, '..', 'public', 'script.js'), 'utf8');
   const markup = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
   const backend = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const registrationHandlerStart = frontend.indexOf("customerRegisterForm.addEventListener('submit'");
+  const registrationHandlerEnd = frontend.indexOf("customerLoginForm.addEventListener('submit'", registrationHandlerStart);
   const addToCartStart = frontend.indexOf('window.addToCart = function addToCart');
   const addToCartEnd = frontend.indexOf('\nfunction changeCartQuantity', addToCartStart);
+  assert.notEqual(registrationHandlerStart, -1);
+  assert.notEqual(registrationHandlerEnd, -1);
   assert.notEqual(addToCartStart, -1);
   assert.notEqual(addToCartEnd, -1);
+  const registrationHandler = frontend.slice(registrationHandlerStart, registrationHandlerEnd);
   const addToCart = frontend.slice(addToCartStart, addToCartEnd);
 
+  assert.match(markup, /name="fullName"/);
+  assert.match(markup, /name="email"/);
+  assert.match(markup, /name="mobileNumber"/);
+  assert.match(markup, /name="password"[^>]*maxlength="72"/);
+  assert.doesNotMatch(markup, /name="confirmPassword"/i);
+  assert.match(registrationHandler, /customerApi\([\s\S]*?'\/api\/customer\/register'/);
+  assert.match(registrationHandler, /Object\.fromEntries\(form\.entries\(\)\)/);
+  assert.match(registrationHandler, /Array\.from\(password\)\.length < 6/);
+  assert.match(registrationHandler, /Password must be at least 6 characters long\./);
+  assert.doesNotMatch(registrationHandler, /\/api\/customer\/login/);
+  assert.match(registrationHandler, /switchTab\('customer-login'\)/);
   assert.match(frontend, /data-product-action="add-to-cart"/);
   assert.match(addToCart, /persistCart\(\);\s*renderCart\(\);/);
   assert.doesNotMatch(addToCart, /customerApi|customer-login/);
@@ -262,7 +278,7 @@ test('storefront browsing and cart remain public, while checkout resumes after c
   assert.match(frontend, /items: items\.map\(\(item\) => \(\{ \.\.\.item \}\)\)[\s\S]*formValues: formValues \? \{ \.\.\.formValues \} : null/);
   assert.match(frontend, /function resumePendingCheckout\(\)[\s\S]*openCheckout\(checkout\.items, checkout\.source, checkout\.formValues\)/);
   assert.match(frontend, /function beginCustomerCheckout\(items, source, formValues = null\)[\s\S]*customerApi\('\/api\/customer\/me'\)[\s\S]*requestCustomerSignIn\(items, source, formValues\)/);
-  assert.equal((frontend.match(/if \(resumePendingCheckout\(\)\)/g) || []).length, 2);
+  assert.equal((frontend.match(/if \(resumePendingCheckout\(\)\)/g) || []).length, 1);
   assert.match(frontend, /checkoutForm\.addEventListener\('submit'[\s\S]*customerApi\('\/api\/customer\/me'\)[\s\S]*apiFetch\('\/api\/place-order'/);
   assert.match(backend, /app\.post\('\/api\/place-order', requireCustomerRequestOrigin, requireCustomerSession, placeCustomerOrder\)/);
   const orderHandler = backend.slice(
@@ -351,11 +367,16 @@ test('OTP-free customer registration, secure sessions, authenticated customer or
 
   const duplicate = await request('/api/customer/register', {
     method: 'POST',
-    body: registration
+    body: { ...registration, password: 'Different1' }
   });
   assert.equal(duplicate.response.status, 202);
   assert.equal(duplicate.result.message, registered.result.message);
   assert.equal(state.accounts.size, 1);
+  const duplicatePasswordLogin = await request('/api/customer/login', {
+    method: 'POST',
+    body: { email: registration.email, password: 'Different1' }
+  });
+  assert.equal(duplicatePasswordLogin.response.status, 401);
 
   const wrongPassword = await request('/api/customer/login', {
     method: 'POST',
