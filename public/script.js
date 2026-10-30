@@ -1,5 +1,7 @@
 const API_BASE_URL = window.APEXTYRE_API_URL ||
-  (['localhost', '127.0.0.1'].includes(window.location.hostname) ? window.location.origin : '');
+  (['localhost', '127.0.0.1'].includes(window.location.hostname)
+    ? window.location.origin
+    : 'https://apextyers2.onrender.com');
 
 function apiUrl(path) {
   if (!API_BASE_URL) throw new Error('Set APEXTYRE_API_URL in api-config.js to your Render backend URL.');
