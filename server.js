@@ -81,8 +81,6 @@ const CUSTOMER_SESSION_COOKIE_OPTIONS = Object.freeze({
   maxAge: CUSTOMER_SESSION_LIFETIME,
   path: '/api'
 });
-let customerMigrationWarningLogged = false;
-
 function setCustomerSessionCookie(res, token) {
   res.cookie(CUSTOMER_SESSION_COOKIE, token, CUSTOMER_SESSION_COOKIE_OPTIONS);
 }
@@ -433,43 +431,6 @@ async function requireCustomerSession(req, res, next) {
   }
 }
 
-async function loadOptionalCustomerSession(req, res, next) {
-  req.customer = null;
-  const token = req.cookies?.[CUSTOMER_SESSION_COOKIE];
-  if (!token) return next();
-
-  let tokenHash;
-  try {
-    tokenHash = hashCustomerSessionToken(token);
-  } catch {
-    return next();
-  }
-
-  try {
-    req.customer = await get(
-      `SELECT account.id, account.full_name, account.email, account.mobile_number,
-              session.id AS session_id
-       FROM public.customer_sessions AS session
-       JOIN public.customer_accounts AS account ON account.id = session.customer_id
-       WHERE session.token_hash = $1
-         AND session.revoked_at IS NULL
-         AND session.expires_at > CURRENT_TIMESTAMP`,
-      [tokenHash]
-    ) || null;
-    next();
-  } catch (error) {
-    if (error.code === '42P01') {
-      req.customer = null;
-      if (!customerMigrationWarningLogged) {
-        console.warn('Customer account migration is not applied; checkout is continuing as guest.');
-        customerMigrationWarningLogged = true;
-      }
-      return next();
-    }
-    next(error);
-  }
-}
-
 const customerRateLimitMaps = new Set();
 const CUSTOMER_RATE_LIMIT_MAX_KEYS = 10000;
 
@@ -585,10 +546,13 @@ app.post(
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const mobileNumber = typeof body.mobileNumber === 'string' ? body.mobileNumber.trim() : '';
     const password = typeof body.password === 'string' ? body.password : '';
+    if (Array.from(password).length < 6) {
+      return sendJsonError(res, 400, 'Password must be at least 6 characters long.');
+    }
     if (fullName.length < 2 || fullName.length > 100 ||
         !email || email.length > 254 || !isValidEmail(email) ||
         !/^(?=.*\d)[0-9+() -]{8,20}$/.test(mobileNumber) ||
-        password.length < 12 || Buffer.byteLength(password, 'utf8') > 72) {
+        Buffer.byteLength(password, 'utf8') > 72) {
       return sendJsonError(res, 400, 'Check your name, email, mobile number, and password requirements.');
     }
 
@@ -743,7 +707,7 @@ app.get('/api/customer/orders', requireCustomerSession, async (req, res, next) =
   }
 });
 
-app.post('/api/place-order', loadOptionalCustomerSession, async (req, res, next) => {
+async function placeCustomerOrder(req, res, next) {
   const body = req.body;
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return sendJsonError(res, 400, 'Order details must be sent as an object.');
@@ -846,7 +810,8 @@ app.post('/api/place-order', loadOptionalCustomerSession, async (req, res, next)
             unitPrice: unitPriceCents / 100,
             subtotal: lineSubtotalCents / 100,
             subtotalCents: lineSubtotalCents
-          });
+            }
+          );
         }
         const deliveryCents = Math.round(DELIVERY_CHARGE * 100);
         const subtotalCents = orderItems.reduce((sum, item) => sum + item.subtotalCents, 0);
@@ -898,29 +863,17 @@ app.post('/api/place-order', loadOptionalCustomerSession, async (req, res, next)
           quantity, firstItem.unitPrice, subtotal, gstAmount, deliveryAmount, total, paymentMethod,
           'Pending', orderCode, 'Pending Approval', invoiceTokenHash
         ];
-        const orderResult = req.customer
-          ? await run(
-            `INSERT INTO orders
-             (customer_id, customer_name, phone, email, address, landmark, pincode, city, state, vehicle_details,
-              product_id, brand, model, tyre_size, quantity, unit_price, subtotal_amount, gst_amount,
-              delivery_amount, total_amount, payment_method, payment_status, order_code, approval_status, invoice_token_hash)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
-                     $19, $20, $21, $22, $23, $24, $25)
-             RETURNING id`,
-            [req.customer.id, ...orderValues],
-            client
-          )
-          : await run(
-            `INSERT INTO orders
-             (customer_name, phone, email, address, landmark, pincode, city, state, vehicle_details,
-              product_id, brand, model, tyre_size, quantity, unit_price, subtotal_amount, gst_amount,
-              delivery_amount, total_amount, payment_method, payment_status, order_code, approval_status, invoice_token_hash)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                     $18, $19, $20, $21, $22, $23, $24)
-             RETURNING id`,
-            orderValues,
-            client
-          );
+        const orderResult = await run(
+          `INSERT INTO orders
+           (customer_id, customer_name, phone, email, address, landmark, pincode, city, state, vehicle_details,
+            product_id, brand, model, tyre_size, quantity, unit_price, subtotal_amount, gst_amount,
+            delivery_amount, total_amount, payment_method, payment_status, order_code, approval_status, invoice_token_hash)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
+                   $19, $20, $21, $22, $23, $24, $25)
+           RETURNING id`,
+          [req.customer.id, ...orderValues],
+          client
+        );
         for (const item of orderItems) {
           await run(
             `INSERT INTO order_items
@@ -1106,7 +1059,9 @@ app.post('/api/place-order', loadOptionalCustomerSession, async (req, res, next)
     requiresOwnerConfirmation: order.items.some((item) => item.specialOrder),
     message: 'Your order is awaiting owner approval. Revenue is recorded only after approval.'
   });
-});
+}
+
+app.post('/api/place-order', requireCustomerRequestOrigin, requireCustomerSession, placeCustomerOrder);
 
 app.get('/api/orders/:orderCode/status', async (req, res, next) => {
   const token = typeof req.get('X-Order-Access') === 'string'

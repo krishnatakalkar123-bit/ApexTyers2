@@ -109,7 +109,7 @@ The SQLite importer uses `sqlite3`, which is a development dependency because th
 |---|---|---|---|
 | GET | `/api/products` | Public | Fetch the tyre catalog |
 | GET | `/api/storefront-settings` | Public | Read the owner-published festival ticker message |
-| POST | `/api/place-order` | Public | Save a uniquely numbered pending single-tyre or multi-item order, reserve stock and email the owner |
+| POST | `/api/place-order` | Customer session | Save a uniquely numbered pending single-tyre or multi-item order, reserve stock and email the customer and owner |
 | POST | `/api/customer/register` | Public, origin-checked, rate-limited | Create an unverified customer account immediately; no verification email is sent |
 | POST | `/api/customer/login` | Public, origin-checked, rate-limited | Sign in with a registered email and password using an HttpOnly session cookie |
 | POST | `/api/customer/logout` | Origin-checked | Revoke the current customer session and clear its cookie |
@@ -127,6 +127,8 @@ The SQLite importer uses `sqlite3`, which is a development dependency because th
 | GET | `/api/admin/customers` | Owner | Customer directory and order summaries |
 | GET | `/api/admin/customers/:email/orders` | Owner | A customer's order history |
 | POST / PUT / DELETE | `/api/products` and `/api/products/:id` | Owner | Manage tyre inventory |
+
+Customers can browse the catalog and add items to their cart without signing in. Checkout and `/api/place-order` require a valid customer session; guest order placement is disabled. The cart remains saved in the browser while customers register or sign in, and checkout form details remain in page memory if a session expires during checkout.
 
 The storefront cart is saved in browser storage, supports quantity changes and removal, and submits selected lines to the server. In-stock products use the PostgreSQL price and reserve stock transactionally. Any catalogue model without enough matching inventory can still be submitted as a special-order request using a server-validated catalogue key and an indicative catalogue estimate; no inventory is reserved for that request. The order is saved in PostgreSQL and appears in the owner's order list across browsers/devices. The owner must verify price and availability before approving a special order. Successful checkout also stores a limited local order-history summary (order ID, status, amount, and item names only); customer contact and address details remain in the server database. The cart and checkout show a flat ₹99 delivery charge and calculate 18% GST on the tyre subtotal plus delivery; the server repeats all price and tax calculations. The owner dashboard refreshes order and sales data every 5 seconds while open. Pending Approval orders do not count toward revenue, average order value, brand sales, or products sold. Approving an order records one approval timestamp and sale amount; the chart tooltip shows the approved order and timestamp.
 

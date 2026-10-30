@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { after, test } = require('node:test');
 
 process.env.DATABASE_URL = 'postgres://test:test@127.0.0.1:1/test';
@@ -10,7 +12,6 @@ process.env.SESSION_SECRET = 'test-only-session-secret-with-more-than-32-charact
 process.env.NODE_ENV = 'test';
 
 let now = Date.now();
-let customerTablesAvailable = true;
 const state = {
   accounts: new Map(),
   sessions: new Map(),
@@ -80,11 +81,6 @@ async function get(sql, params = []) {
       : undefined;
   }
   if (sql.includes('FROM public.customer_sessions AS session')) {
-    if (!customerTablesAvailable) {
-      const error = new Error('relation does not exist');
-      error.code = '42P01';
-      throw error;
-    }
     const session = state.sessions.get(Buffer.from(params[0]).toString('hex'));
     const account = session && accountById(session.customer_id);
     if (!session || session.revoked_at || session.expires_at <= now || !account) {
@@ -249,6 +245,36 @@ function sessionCookie(response) {
   return setCookie.split(';', 1)[0];
 }
 
+test('storefront browsing and cart remain public, while checkout resumes after customer authentication', () => {
+  const frontend = fs.readFileSync(path.join(__dirname, '..', 'public', 'script.js'), 'utf8');
+  const markup = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  const backend = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const addToCartStart = frontend.indexOf('window.addToCart = function addToCart');
+  const addToCartEnd = frontend.indexOf('\nfunction changeCartQuantity', addToCartStart);
+  assert.notEqual(addToCartStart, -1);
+  assert.notEqual(addToCartEnd, -1);
+  const addToCart = frontend.slice(addToCartStart, addToCartEnd);
+
+  assert.match(frontend, /data-product-action="add-to-cart"/);
+  assert.match(addToCart, /persistCart\(\);\s*renderCart\(\);/);
+  assert.doesNotMatch(addToCart, /customerApi|customer-login/);
+  assert.match(frontend, /function requestCustomerSignIn\(items, source, formValues = null\)/);
+  assert.match(frontend, /items: items\.map\(\(item\) => \(\{ \.\.\.item \}\)\)[\s\S]*formValues: formValues \? \{ \.\.\.formValues \} : null/);
+  assert.match(frontend, /function resumePendingCheckout\(\)[\s\S]*openCheckout\(checkout\.items, checkout\.source, checkout\.formValues\)/);
+  assert.match(frontend, /function beginCustomerCheckout\(items, source, formValues = null\)[\s\S]*customerApi\('\/api\/customer\/me'\)[\s\S]*requestCustomerSignIn\(items, source, formValues\)/);
+  assert.equal((frontend.match(/if \(resumePendingCheckout\(\)\)/g) || []).length, 2);
+  assert.match(frontend, /checkoutForm\.addEventListener\('submit'[\s\S]*customerApi\('\/api\/customer\/me'\)[\s\S]*apiFetch\('\/api\/place-order'/);
+  assert.match(backend, /app\.post\('\/api\/place-order', requireCustomerRequestOrigin, requireCustomerSession, placeCustomerOrder\)/);
+  const orderHandler = backend.slice(
+    backend.indexOf('async function placeCustomerOrder'),
+    backend.indexOf("app.get('/api/orders/:orderCode/status'")
+  );
+  assert.doesNotMatch(orderHandler, /body\.customer_id|body\[['"]customer_id['"]\]/);
+  assert.match(markup, /data-view-panel="customer-login"/);
+  assert.match(markup, /data-view-panel="customer-register"/);
+  assert.doesNotMatch(markup, /Guest Checkout/i);
+});
+
 test('owner login remains separate from customer authentication', async () => {
   const ownerLogin = await request('/api/admin/login', {
     method: 'POST',
@@ -260,6 +286,12 @@ test('owner login remains separate from customer authentication', async () => {
   const ownerSession = ownerCookie.split(';', 1)[0];
   const ownerProfile = await request('/api/admin/me', { cookie: ownerSession });
   assert.equal(ownerProfile.response.status, 200);
+  const ownerCannotPlaceCustomerOrder = await request('/api/place-order', {
+    method: 'POST',
+    body: {},
+    cookie: ownerSession
+  });
+  assert.equal(ownerCannotPlaceCustomerOrder.response.status, 401);
 
   const customerLogin = await request('/api/admin/login', {
     method: 'POST',
@@ -268,12 +300,16 @@ test('owner login remains separate from customer authentication', async () => {
   assert.equal(customerLogin.response.status, 401);
 });
 
-test('customer registration without email verification, sessions, customer orders and guest checkout', async () => {
+test('OTP-free customer registration, secure sessions, authenticated customer orders and checkout', async () => {
+  const publicCatalog = await request('/api/products');
+  assert.equal(publicCatalog.response.status, 200);
+  assert.deepEqual(publicCatalog.result, []);
+
   const registration = {
     fullName: 'Avery Morgan',
     email: ' CUSTOMER@example.test ',
     mobileNumber: '9876543210',
-    password: 'StrongPass12345'
+    password: 'A1bcde'
   };
   assert.deepEqual(Object.keys(registration), ['fullName', 'email', 'mobileNumber', 'password']);
 
@@ -289,6 +325,17 @@ test('customer registration without email verification, sessions, customer order
     body: { ...registration, password: 'short' }
   });
   assert.equal(invalidRegistration.response.status, 400);
+  assert.equal(invalidRegistration.result.error, 'Password must be at least 6 characters long.');
+
+  const overlongPassword = await request('/api/customer/register', {
+    method: 'POST',
+    body: { ...registration, password: 'A'.repeat(73) }
+  });
+  assert.equal(overlongPassword.response.status, 400);
+  assert.equal(
+    overlongPassword.result.error,
+    'Check your name, email, mobile number, and password requirements.'
+  );
 
   const registered = await request('/api/customer/register', {
     method: 'POST',
@@ -355,6 +402,22 @@ test('customer registration without email verification, sessions, customer order
     customer_id: 99999,
     items: [{ catalogKey: catalogProducts[0].catalog_key, quantity: 1 }]
   };
+  const unauthenticatedOrder = await request('/api/place-order', {
+    method: 'POST',
+    body: orderPayload
+  });
+  assert.equal(unauthenticatedOrder.response.status, 401);
+  assert.equal(state.orders.length, 0);
+
+  const disallowedOriginOrder = await request('/api/place-order', {
+    method: 'POST',
+    originHeader: 'https://attacker.example',
+    body: orderPayload,
+    cookie: customerCookie
+  });
+  assert.equal(disallowedOriginOrder.response.status, 403);
+  assert.equal(state.orders.length, 0);
+
   const customerOrder = await request('/api/place-order', {
     method: 'POST',
     body: orderPayload,
@@ -368,21 +431,6 @@ test('customer registration without email verification, sessions, customer order
   assert.equal(ownOrders.result.orders.length, 1);
   assert.equal(ownOrders.result.orders[0].order_code, customerOrder.result.orderCode);
   assert.equal(ownOrders.result.orders[0].items[0].quantity, 1);
-
-  const guestOrder = await request('/api/place-order', { method: 'POST', body: orderPayload });
-  assert.equal(guestOrder.response.status, 201);
-  assert.equal(state.orders[1].customer_id, null);
-  customerTablesAvailable = false;
-  const guestOrderWithStaleCookie = await request('/api/place-order', {
-    method: 'POST',
-    body: orderPayload,
-    cookie: customerCookie
-  });
-  assert.equal(guestOrderWithStaleCookie.response.status, 201);
-  assert.equal(state.orders[2].customer_id, null);
-  customerTablesAvailable = true;
-  const stillOwnOrders = await request('/api/customer/orders', { cookie: customerCookie });
-  assert.equal(stillOwnOrders.result.orders.length, 1);
 
   const secondRegistration = {
     fullName: 'Another Customer',
@@ -417,6 +465,13 @@ test('customer registration without email verification, sessions, customer order
   assert.equal(logout.response.status, 200);
   const revokedProfile = await request('/api/customer/me', { cookie: customerCookie });
   assert.equal(revokedProfile.response.status, 401);
+  const revokedCustomerOrder = await request('/api/place-order', {
+    method: 'POST',
+    body: orderPayload,
+    cookie: customerCookie
+  });
+  assert.equal(revokedCustomerOrder.response.status, 401);
+  assert.equal(state.orders.length, 1);
 
   now += 8 * 60 * 60 * 1000;
   const expiredLogin = await request('/api/customer/login', {

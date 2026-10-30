@@ -107,6 +107,7 @@ let cartItems = [];
 let checkoutItems = [];
 let checkoutSource = 'single';
 let currentCustomer = null;
+let pendingCheckout = null;
 
 function applyTheme(theme) {
   const activeTheme = theme === 'light' ? 'light' : 'dark';
@@ -352,7 +353,11 @@ function showToast(message) {
 async function customerApi(path, options = {}) {
   const response = await apiFetch(path, options);
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || 'The customer account request could not be completed.');
+  if (!response.ok) {
+    const error = new Error(result.error || 'The customer account request could not be completed.');
+    error.status = response.status;
+    throw error;
+  }
   return result;
 }
 
@@ -649,7 +654,7 @@ window.quickBuy = function quickBuy(productId) {
     showToast('This tyre listing is no longer available.');
     return;
   }
-  openCheckout([{
+  void beginCustomerCheckout([{
     productId: product.inventory_id ? Number(product.inventory_id) : null,
     catalogKey: product.catalog_key || '',
     quantity: 1
@@ -718,7 +723,7 @@ function saveLocalOrderSummary(order, items) {
   }
 }
 
-function openCheckout(items, source = 'single') {
+function openCheckout(items, source = 'single', formValues = null) {
   checkoutForm.reset();
   checkoutError.textContent = '';
   checkoutItems = items.map((item) => ({
@@ -746,8 +751,53 @@ function openCheckout(items, source = 'single') {
     quantityInput.max = cartQuantityLimit(product);
     quantityInput.value = checkoutItems[0].quantity;
   }
+  if (formValues) {
+    Object.entries(formValues).forEach(([name, value]) => {
+      const control = checkoutForm.elements.namedItem(name);
+      if (control && 'value' in control) control.value = value;
+    });
+  }
   renderCheckoutSummary();
   openDialog(checkoutDialog);
+}
+
+function requestCustomerSignIn(items, source, formValues = null) {
+  pendingCheckout = {
+    items: items.map((item) => ({ ...item })),
+    source,
+    formValues: formValues ? { ...formValues } : null
+  };
+  closeDialog(checkoutDialog);
+  closeDialog(cartDialog);
+  switchTab('customer-login');
+  showToast('Sign in or create an account to continue checkout.');
+}
+
+function resumePendingCheckout() {
+  if (!pendingCheckout) return false;
+  const checkout = pendingCheckout;
+  pendingCheckout = null;
+  openCheckout(checkout.items, checkout.source, checkout.formValues);
+  return true;
+}
+
+async function beginCustomerCheckout(items, source, formValues = null) {
+  try {
+    const result = await customerApi('/api/customer/me');
+    showCustomerProfile(result.customer);
+    closeDialog(cartDialog);
+    openCheckout(items, source, formValues);
+  } catch (error) {
+    if (error.status !== 401) {
+      showToast(error.message);
+      return;
+    }
+    currentCustomer = null;
+    customerAccountNav.dataset.viewLink = 'customer-login';
+    customerAccountNav.querySelector('strong').textContent = 'Customer';
+    customerAccountNav.querySelector('small').textContent = 'Sign In / Register';
+    requestCustomerSignIn(items, source, formValues);
+  }
 }
 
 async function loadStorefrontSettings() {
@@ -877,8 +927,7 @@ cartCheckoutButton.addEventListener('click', () => {
     catalogKey: item.catalogKey,
     quantity: item.quantity
   }));
-  closeDialog(cartDialog);
-  openCheckout(items, 'cart');
+  void beginCustomerCheckout(items, 'cart');
 });
 customerInvoiceDownload.addEventListener('click', async (event) => {
   event.preventDefault();
@@ -917,15 +966,35 @@ customerRegisterForm.addEventListener('submit', async (event) => {
   submitButton.textContent = 'Creating account…';
   const form = new FormData(customerRegisterForm);
   const email = String(form.get('email') || '').trim().toLowerCase();
+  const password = String(form.get('password') || '');
+  if (Array.from(password).length < 6) {
+    errorElement.textContent = 'Password must be at least 6 characters long.';
+    customerRegisterForm.elements.password.focus();
+    submitButton.disabled = false;
+    submitButton.textContent = originalLabel;
+    return;
+  }
   try {
-    const result = await customerApi(
+    await customerApi(
       '/api/customer/register',
       customerJsonRequest('POST', Object.fromEntries(form.entries()))
     );
+    await customerApi(
+      '/api/customer/login',
+      customerJsonRequest('POST', { email, password })
+    );
+    const result = await customerApi('/api/customer/me');
+    showCustomerProfile(result.customer);
     customerLoginForm.elements.email.value = email;
+    customerLoginForm.elements.password.value = '';
     customerRegisterForm.reset();
-    switchTab('customer-login');
-    showToast(result.message);
+    if (resumePendingCheckout()) {
+      showToast('Your account is ready. Complete checkout to place your order.');
+    } else {
+      switchTab('customer-account');
+      await loadCustomerOrders();
+      showToast('Your account is ready and you are signed in.');
+    }
   } catch (error) {
     errorElement.textContent = error.message;
   } finally {
@@ -951,8 +1020,12 @@ customerLoginForm.addEventListener('submit', async (event) => {
     const result = await customerApi('/api/customer/me');
     showCustomerProfile(result.customer);
     customerLoginForm.elements.password.value = '';
-    switchTab('customer-account');
-    await loadCustomerOrders();
+    if (resumePendingCheckout()) {
+      showToast('You are signed in. Complete checkout to place your order.');
+    } else {
+      switchTab('customer-account');
+      await loadCustomerOrders();
+    }
   } catch (error) {
     errorElement.textContent = error.message;
   } finally {
@@ -1060,13 +1133,18 @@ checkoutForm.addEventListener('submit', async (event) => {
   payload.items = items;
   delete payload.quantity;
   try {
+    await customerApi('/api/customer/me');
     const response = await apiFetch('/api/place-order', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'Could not place your order.');
+    if (!response.ok) {
+      const error = new Error(result.error || 'Could not place your order.');
+      error.status = response.status;
+      throw error;
+    }
     saveLocalOrderSummary(result, items);
     if (checkoutSource === 'cart') {
       cartItems = [];
@@ -1077,7 +1155,11 @@ checkoutForm.addEventListener('submit', async (event) => {
     showOrderConfirmation(result, String(payload.email));
     await loadProducts();
   } catch (error) {
-    checkoutError.textContent = error.message;
+    if (error.status === 401) {
+      requestCustomerSignIn(items, checkoutSource, Object.fromEntries(new FormData(checkoutForm).entries()));
+    } else {
+      checkoutError.textContent = error.message;
+    }
   } finally {
     submitButton.disabled = false;
   }
