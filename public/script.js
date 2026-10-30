@@ -673,9 +673,11 @@ function showOrderConfirmation(order, customerEmail) {
   const emailDelivery = order.emailDelivery || {};
   const emailStatus = emailDelivery.customerSent
     ? `Your order summary with the GST breakdown has been sent to ${customerEmail}.`
-    : emailDelivery.configured
-      ? `Your order is saved, but we could not send the email to ${customerEmail}. Please contact ApexTyre to confirm your order.`
-      : 'Your order is saved, but email delivery is not configured. Please contact ApexTyre to confirm your order.';
+    : emailDelivery.pending
+      ? `Your order is saved. The server is attempting to send a confirmation to ${customerEmail}.`
+      : emailDelivery.configured
+        ? `Your order is saved, but we could not send the email to ${customerEmail}. Please contact ApexTyre to confirm your order.`
+        : 'Your order is saved, but email delivery is not configured. Please contact ApexTyre to confirm your order.';
   document.querySelector('#order-confirmation-summary').textContent = order.requiresOwnerConfirmation
     ? `${emailStatus} The owner will confirm special-order price and availability before approval.`
     : `${emailStatus} Owner approval is pending.`;

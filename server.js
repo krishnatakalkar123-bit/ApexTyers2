@@ -4,7 +4,6 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const express = require('express');
 const cors = require('cors');
-const nodemailer = require('nodemailer');
 const { products: catalogProducts } = require('./public/catalog-data');
 const { all, get, initializeDatabase, pool, run, withTransaction } = require('./database');
 
@@ -17,6 +16,8 @@ const ORDER_STATUSES = ['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancel
 const GST_RATE = 0.18;
 const DELIVERY_CHARGE = 99;
 const OWNER_EMAIL_FALLBACK = 'swapnilnarwade73@gmail.com';
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const EMAIL_FROM = process.env.EMAIL_FROM || '';
 const BUSINESS_GSTIN = process.env.BUSINESS_GSTIN || '';
 const BUSINESS_ADDRESS = process.env.BUSINESS_ADDRESS || '';
 const catalogProductsByKey = new Map(catalogProducts.map((product) => [product.catalog_key, product]));
@@ -31,6 +32,30 @@ function sendJsonError(res, status, message) {
 
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+async function sendResendEmail(message) {
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: EMAIL_FROM,
+      to: [message.recipient],
+      subject: message.subject,
+      html: message.html,
+      ...(message.text ? { text: message.text } : {})
+    }),
+    signal: AbortSignal.timeout(10000)
+  });
+
+  if (!response.ok) {
+    const error = new Error('Resend API request failed');
+    error.status = response.status;
+    throw error;
+  }
 }
 
 function validateProduct(product) {
@@ -321,13 +346,6 @@ app.use(express.json({ limit: '20kb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(parseCookies);
 
-const mailer = process.env.EMAIL_USER && process.env.EMAIL_PASS
-  ? nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
-  })
-  : null;
-
 app.get('/api/products', async (req, res, next) => {
   try {
     res.json(await all('SELECT * FROM products ORDER BY brand, model'));
@@ -574,9 +592,14 @@ app.post('/api/place-order', async (req, res, next) => {
     return next(error);
   }
 
-  const emailDelivery = { configured: Boolean(mailer), customerSent: false, ownerSent: false };
-  if (mailer) {
-    const ownerEmail = process.env.OWNER_EMAIL || process.env.EMAIL_USER || OWNER_EMAIL_FALLBACK;
+  const emailDelivery = {
+    configured: Boolean(RESEND_API_KEY && EMAIL_FROM),
+    customerSent: false,
+    ownerSent: false,
+    pending: Boolean(RESEND_API_KEY && EMAIL_FROM)
+  };
+  if (emailDelivery.configured) {
+    const ownerEmail = process.env.OWNER_EMAIL || OWNER_EMAIL_FALLBACK;
     const currency = new Intl.NumberFormat('en-IN', {
       style: 'currency',
       currency: 'INR',
@@ -659,32 +682,23 @@ app.post('/api/place-order', async (req, res, next) => {
         html: ownerHtml
       }
     ];
-    const deliveries = await Promise.allSettled(messages.map((message) =>
-      mailer.sendMail({
-        from: process.env.EMAIL_USER,
-        to: message.recipient,
-        subject: message.subject,
-        html: message.html,
-        text: message.text
-      })
-    ));
-    deliveries.forEach((delivery, index) => {
-      const message = messages[index];
-      const recipientAccepted = delivery.status === 'fulfilled' &&
-        Array.isArray(delivery.value.accepted) &&
-        delivery.value.accepted.some((accepted) => String(accepted).toLowerCase() === message.recipient.toLowerCase());
-      emailDelivery[index === 0 ? 'customerSent' : 'ownerSent'] = recipientAccepted;
-      if (recipientAccepted) {
-        console.log(`Order ${order.orderCode} email sent to ${index === 0 ? 'customer' : 'shop owner'}.`);
-      } else {
-        const error = delivery.status === 'rejected'
-          ? delivery.reason
-          : new Error(`Mail transport did not accept recipient ${message.recipient}.`);
-        console.error(`Could not send ${index === 0 ? 'customer' : 'shop owner'} email for order ${order.orderCode}:`, error);
-      }
+    void Promise.allSettled(messages.map(sendResendEmail)).then((deliveries) => {
+      deliveries.forEach((delivery, index) => {
+        const label = index === 0 ? 'customer' : 'shop owner';
+        if (delivery.status === 'fulfilled') {
+          console.log(`Order ${order.orderCode} email accepted for ${label}.`);
+          return;
+        }
+
+        const status = delivery.reason?.status;
+        const detail = Number.isInteger(status) ? `HTTP ${status}` : 'network or timeout error';
+        console.error(`Could not send ${label} email for order ${order.orderCode} (${detail}).`);
+      });
+    }).catch(() => {
+      console.error(`Email delivery processing failed for order ${order.orderCode}.`);
     });
   } else {
-    console.warn('Order saved. Email is not configured; set EMAIL_USER and EMAIL_PASS in .env to enable order emails.');
+    console.warn('Order saved. Email is not configured; set RESEND_API_KEY and EMAIL_FROM to enable order emails.');
   }
 
   res.status(201).json({

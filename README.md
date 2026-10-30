@@ -1,6 +1,6 @@
 # apexTyre.com
 
-A lightweight tyre-shop website built with HTML, CSS, vanilla JavaScript, Express, PostgreSQL, and Nodemailer. The existing `apextyre.db` is retained as the read-only source for a one-time import.
+A lightweight tyre-shop website built with HTML, CSS, vanilla JavaScript, Express, PostgreSQL, and the Resend Email API. The existing `apextyre.db` is retained as the read-only source for a one-time import.
 
 ## Project files
 
@@ -42,9 +42,9 @@ apextyre/
    - `PORT`: web server port (default `3000`)
    - `DATABASE_URL`: PostgreSQL connection URL from Neon
    - `PG_POOL_MAX`: optional maximum PostgreSQL pool size (default `10`)
-   - `EMAIL_USER`: Gmail account used to send order alerts
-   - `EMAIL_PASS`: a Gmail **App Password**, not the normal Gmail password
-   - `OWNER_EMAIL`: shop owner's destination inbox
+   - `RESEND_API_KEY`: Resend API key, used only by the backend
+   - `EMAIL_FROM`: sender address verified with Resend (for example `ApexTyre <orders@example.com>`)
+   - `OWNER_EMAIL`: shop owner's destination inbox (defaults to `swapnilnarwade73@gmail.com`)
    - `ADMIN_USERNAME`: owner username for `/admin` (defaults to `admin`)
    - `ADMIN_PASSWORD`: owner password for `/admin`
    - `BUSINESS_GSTIN`: registered seller GSTIN required for a statutory invoice
@@ -58,7 +58,7 @@ apextyre/
    node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
    ```
 
-   To create a Gmail App Password, enable 2-Step Verification on the Google account, then create an App Password in Google Account security settings. Do not commit `.env` or share its values. Email settings can be left blank during local UI development; the order is still saved and the server logs that email is not configured.
+   Keep the Resend API key in the backend environment only; never put it in frontend files, commit it, or log it. Email settings can be left blank during local development; orders are still saved and email sending is skipped.
 
 5. Set `window.APEXTYRE_API_URL` in `public/api-config.js` to the Render backend origin when the frontend is hosted separately. Leave it empty for local development.
 
@@ -133,8 +133,8 @@ The generated PDF includes a GST calculation and the seller contact, but statuto
 
 ## Email and payments
 
-After an order is committed to PostgreSQL, Nodemailer sends an itemized order receipt with an 18% GST estimate to the customer's checkout email and an order alert to `OWNER_EMAIL` (defaults to `swapnilnarwade73@gmail.com`). Delivery is reported separately for each message; if Gmail is unavailable, the order stays saved and the failure is logged and shown in the confirmation. Because the order is still pending owner approval, the customer email is an order receipt/estimate rather than a final tax invoice. The approved GST invoice remains available for download after approval.
+After an order is committed to PostgreSQL, the backend sends an itemized order receipt with an 18% GST estimate to the customer's checkout email and an order alert to `OWNER_EMAIL` (defaults to `swapnilnarwade73@gmail.com`) through Resend's HTTPS API. Configure `RESEND_API_KEY` and a Resend-verified `EMAIL_FROM` in the backend environment (including Render); the API key is never sent to the frontend. Email delivery runs asynchronously, so order creation does not wait for Resend, and an email failure cannot cancel or undo the saved order. If email is not configured, orders are still saved and the storefront advises the customer to contact ApexTyre. Because the order is still pending owner approval, the customer email is an order receipt/estimate rather than a final tax invoice. The approved GST invoice remains available for download after approval.
 
 COD, UPI and online payment selections are recorded, but this starter does **not** collect payment or mark UPI/online orders as paid. Connect a payment provider and verify its server-side webhook before treating an online order as paid.
 
-For production, deploy behind HTTPS, configure a strong unique `SESSION_SECRET` and owner password, use a dedicated Gmail sender with an App Password, and use Neon backup/restore procedures for PostgreSQL.
+For production, deploy behind HTTPS, configure a strong unique `SESSION_SECRET` and owner password, use a Resend-verified sender address, and use Neon backup/restore procedures for PostgreSQL.
