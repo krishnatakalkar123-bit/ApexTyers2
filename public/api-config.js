@@ -1,1 +1,1 @@
-window.APEXTYRE_API_URL = '';
+window.APEXTYRE_API_URL = 'https://apextyers2.onrender.com';
