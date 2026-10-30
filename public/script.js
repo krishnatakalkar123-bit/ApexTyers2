@@ -1,3 +1,29 @@
+const API_BASE_URL = window.APEXTYRE_API_URL ||
+  (['localhost', '127.0.0.1'].includes(window.location.hostname) ? window.location.origin : '');
+
+function apiUrl(path) {
+  if (!API_BASE_URL) throw new Error('Set APEXTYRE_API_URL in api-config.js to your Render backend URL.');
+  return new URL(path, `${API_BASE_URL.replace(/\/+$/, '')}/`).toString();
+}
+
+function apiFetch(path, options = {}) {
+  const headers = {
+    ...(options.method?.toUpperCase() === 'POST' ? { 'Content-Type': 'application/json' } : {}),
+    ...options.headers,
+    'ngrok-skip-browser-warning': 'true'
+  };
+  return fetch(apiUrl(path), {
+    ...options,
+    credentials: 'include',
+    headers
+  }).catch((error) => {
+    if (error instanceof TypeError) {
+      throw new Error(`Could not reach the ApexTyre API at ${API_BASE_URL}. Check the Render service and CORS configuration.`);
+    }
+    throw error;
+  });
+}
+
 const productList = document.querySelector('#product-list');
 const searchInput = document.querySelector('#product-search');
 const filterChips = [...document.querySelectorAll('.filter-chip')];
@@ -228,7 +254,7 @@ function clearFilters() {
 async function loadProducts() {
   productList.innerHTML = '<p class="market-notice">Loading tyre catalog…</p>';
   try {
-    const response = await fetch('/api/products');
+    const response = await apiFetch('/api/products');
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Could not load the tyre catalog.');
     if (!Array.isArray(result)) throw new Error('The product catalog returned an unexpected response.');
@@ -625,7 +651,7 @@ function openCheckout(items, source = 'single') {
 
 async function loadStorefrontSettings() {
   try {
-    const response = await fetch('/api/storefront-settings', { cache: 'no-store' });
+    const response = await apiFetch('/api/storefront-settings', { cache: 'no-store' });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Could not load the current store offer.');
     const offer = String(result.diwaliOffer || '').trim();
@@ -670,7 +696,7 @@ function startCustomerOrderPolling(orderCode, invoiceToken) {
   window.clearInterval(customerOrderPollTimer);
   const refreshStatus = async () => {
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `/api/orders/${encodeURIComponent(orderCode)}/status`,
         { headers: { 'X-Order-Access': invoiceToken } }
       );
@@ -680,7 +706,7 @@ function startCustomerOrderPolling(orderCode, invoiceToken) {
       if (result.invoiceAvailable) {
         document.querySelector('#confirmation-status-hint').textContent =
           `Approved and dispatched${result.approvedAt ? ` at ${new Date(`${result.approvedAt.replace(' ', 'T')}Z`).toLocaleString()}` : ''}. Your GST invoice is ready.`;
-        customerInvoiceDownload.href = `/api/orders/${encodeURIComponent(orderCode)}/invoice`;
+        customerInvoiceDownload.href = apiUrl(`/api/orders/${encodeURIComponent(orderCode)}/invoice`);
         customerInvoiceDownload.hidden = false;
         window.clearInterval(customerOrderPollTimer);
       } else if (result.approvalStatus === 'Rejected') {
@@ -754,7 +780,7 @@ cartCheckoutButton.addEventListener('click', () => {
 customerInvoiceDownload.addEventListener('click', async (event) => {
   event.preventDefault();
   try {
-    const response = await fetch(customerInvoiceDownload.href, {
+    const response = await apiFetch(customerInvoiceDownload.href, {
       headers: { 'X-Order-Access': customerInvoiceDownload.dataset.invoiceToken }
     });
     if (!response.ok) {
@@ -848,7 +874,7 @@ checkoutForm.addEventListener('submit', async (event) => {
   payload.items = items;
   delete payload.quantity;
   try {
-    const response = await fetch('/api/place-order', {
+    const response = await apiFetch('/api/place-order', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -893,7 +919,7 @@ ownerForm.addEventListener('submit', async (event) => {
   errorMessage.textContent = '';
   submitButton.disabled = true;
   try {
-    const response = await fetch('/api/admin/login', {
+    const response = await apiFetch('/api/admin/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -903,7 +929,7 @@ ownerForm.addEventListener('submit', async (event) => {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Could not sign in.');
-    window.location.assign('/admin');
+    window.location.assign('admin.html');
   } catch (error) {
     errorMessage.textContent = error.message;
     submitButton.disabled = false;

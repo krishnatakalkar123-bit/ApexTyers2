@@ -4,14 +4,14 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const express = require('express');
 const cors = require('cors');
-const sqlite3 = require('sqlite3').verbose();
 const nodemailer = require('nodemailer');
 const { products: catalogProducts } = require('./public/catalog-data');
+const { all, get, initializeDatabase, pool, run, withTransaction } = require('./database');
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
-const DB_PATH = path.join(__dirname, 'apextyre.db');
+const PORT = process.env.PORT || 3000;
 const SESSION_COOKIE = 'apextyre_owner';
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || '';
 const SESSION_LIFETIME = 8 * 60 * 60 * 1000;
 const ORDER_STATUSES = ['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
 const GST_RATE = 0.18;
@@ -23,37 +23,6 @@ const catalogProductsByKey = new Map(catalogProducts.map((product) => [product.c
 
 if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.length < 32) {
   throw new Error('SESSION_SECRET must contain at least 32 characters.');
-}
-
-const db = new sqlite3.Database(DB_PATH);
-
-function run(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function onRun(error) {
-      if (error) return reject(error);
-      resolve({ id: this.lastID, changes: this.changes });
-    });
-  });
-}
-
-function get(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (error, row) => error ? reject(error) : resolve(row));
-  });
-}
-
-function all(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (error, rows) => error ? reject(error) : resolve(rows));
-  });
-}
-
-let writeQueue = Promise.resolve();
-
-function withWriteLock(operation) {
-  const pending = writeQueue.then(operation);
-  writeQueue = pending.catch(() => {});
-  return pending;
 }
 
 function sendJsonError(res, status, message) {
@@ -111,6 +80,12 @@ function formatCurrency(value) {
   return `Rs. ${Number(value || 0).toFixed(2)}`;
 }
 
+function formatTimestamp(value) {
+  return value instanceof Date
+    ? value.toISOString()
+    : String(value || '');
+}
+
 function makeInvoicePdf(order) {
   const text = (value) => String(value ?? '')
     .normalize('NFKD')
@@ -147,7 +122,8 @@ function makeInvoicePdf(order) {
   const address = [
     order.address, order.landmark, order.city, order.state, order.pincode
   ].filter(Boolean).join(', ');
-  const approvedAt = String(order.approved_at || order.created_at).replace('T', ' ').replace('Z', ' UTC');
+  const approvedAt = formatTimestamp(order.approved_at || order.created_at)
+    .replace('T', ' ').replace('Z', ' UTC');
   const items = Array.isArray(order.items) && order.items.length
     ? order.items
     : [{
@@ -229,7 +205,7 @@ function makeInvoicePdf(order) {
 
   line(42, summaryY - 88, 553, summaryY - 88);
   writeText('Order status: Approved & Dispatched', 48, summaryY - 110, 9);
-  writeText(`Order placed: ${String(order.created_at).replace('T', ' ').slice(0, 19)}`, 48, summaryY - 127, 9);
+  writeText(`Order placed: ${formatTimestamp(order.created_at).replace('T', ' ').slice(0, 19)}`, 48, summaryY - 127, 9);
   rect(400, 125, 142, 52, '0.93 0.97 0.94');
   writeText('AUTHORIZED SIGNATORY', 412, 160, 8, 'F2', '0.08 0.45 0.37');
   writeText('ApexTyre Store', 412, 141, 10, 'F2');
@@ -317,6 +293,19 @@ function parseCookies(req, res, next) {
 }
 
 const loginAttempts = new Map();
+
+const allowedOrigins = [
+  'https://brilliant-semifreddo-ca3b22.netlify.app',
+  'https://famous-figolla-ae93f8.netlify.app',
+  'http://localhost:3000',
+  ...(FRONTEND_ORIGIN ? [FRONTEND_ORIGIN] : [])
+];
+
+const corsOptions = {
+  origin: allowedOrigins,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
+};
 const cleanupAttempts = setInterval(() => {
   const cutoff = Date.now() - 15 * 60 * 1000;
   for (const [ip, attempt] of loginAttempts) {
@@ -326,10 +315,10 @@ const cleanupAttempts = setInterval(() => {
 cleanupAttempts.unref();
 
 app.disable('x-powered-by');
-if (process.env.FRONTEND_ORIGIN) {
-  app.use(cors({ origin: process.env.FRONTEND_ORIGIN }));
-}
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '20kb' }));
+app.use(express.urlencoded({ extended: true }));
 app.use(parseCookies);
 
 const mailer = process.env.EMAIL_USER && process.env.EMAIL_PASS
@@ -407,17 +396,26 @@ app.post('/api/place-order', async (req, res, next) => {
   const invoiceTokenHash = crypto.createHash('sha256').update(invoiceToken).digest('hex');
   let order;
   try {
-    order = await withWriteLock(async () => {
-      let orderCode;
-      do {
-        orderCode = `APX-${new Date().getFullYear()}-${crypto.randomInt(100000, 1000000)}`;
-      } while (await get('SELECT 1 FROM orders WHERE order_code = ?', [orderCode]));
-      await run('BEGIN IMMEDIATE');
+    for (let attempt = 0; ; attempt += 1) {
       try {
+        order = await withTransaction(async (client) => {
+          let orderCode;
+          do {
+            orderCode = `APX-${new Date().getFullYear()}-${crypto.randomInt(100000, 1000000)}`;
+          } while (await get('SELECT 1 FROM orders WHERE order_code = $1', [orderCode], client));
+        const productIds = [...new Set(itemPayload
+          .map((item) => item.productId)
+          .filter((id) => id !== null))].sort((left, right) => left - right);
+        const lockedProducts = await all(
+          'SELECT * FROM products WHERE id = ANY($1::integer[]) ORDER BY id FOR UPDATE',
+          [productIds],
+          client
+        );
+        const productsById = new Map(lockedProducts.map((product) => [product.id, product]));
         const orderItems = [];
         for (const requested of itemPayload) {
           let product = requested.productId
-            ? await get('SELECT * FROM products WHERE id = ?', [requested.productId])
+            ? productsById.get(requested.productId)
             : null;
           const canReserveInventory = product && product.stock_quantity >= requested.quantity;
           if (!canReserveInventory) {
@@ -498,7 +496,9 @@ app.post('/api/place-order', async (req, res, next) => {
            (customer_name, phone, email, address, landmark, pincode, city, state, vehicle_details,
             product_id, brand, model, tyre_size, quantity, unit_price, subtotal_amount, gst_amount,
             delivery_amount, total_amount, payment_method, payment_status, order_code, approval_status, invoice_token_hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                   $18, $19, $20, $21, $22, $23, $24)
+           RETURNING id`,
           [
             customer.fullName, customer.phone, customer.email, customer.address, customer.landmark,
             customer.pincode, customer.city, customer.state, customer.vehicleDetails,
@@ -508,26 +508,33 @@ app.post('/api/place-order', async (req, res, next) => {
             orderItems.length === 1 ? firstItem.product.tyre_size : 'Multiple sizes',
             quantity, firstItem.unitPrice, subtotal, gstAmount, deliveryAmount, total, paymentMethod,
             'Pending', orderCode, 'Pending Approval', invoiceTokenHash
-          ]
+          ],
+          client
         );
         for (const item of orderItems) {
           await run(
             `INSERT INTO order_items
              (order_id, product_id, brand, model, tyre_size, quantity, unit_price, subtotal_amount, gst_amount)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
             [
               orderResult.id, item.product.id || null, item.product.brand, item.product.model, item.product.tyre_size,
               item.quantity, item.unitPrice, item.subtotal, item.gstAmount
-            ]
+            ],
+            client
           );
           if (item.product.id) {
-            await run(
-              'UPDATE products SET stock_quantity = stock_quantity - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-              [item.quantity, item.product.id]
+            const stockUpdate = await run(
+              'UPDATE products SET stock_quantity = stock_quantity - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND stock_quantity >= $1',
+              [item.quantity, item.product.id],
+              client
             );
+            if (stockUpdate.changes !== 1) {
+              const error = new Error(`Not enough stock is available for ${item.product.brand} ${item.product.model}.`);
+              error.status = 409;
+              throw error;
+            }
           }
         }
-        await run('COMMIT');
         return {
           id: orderResult.id,
           orderCode,
@@ -553,11 +560,15 @@ app.post('/api/place-order', async (req, res, next) => {
           paymentMethod,
           paymentStatus: 'Pending'
         };
+        });
+        break;
       } catch (error) {
-        await run('ROLLBACK');
+        if (error.code === '23505' && error.constraint === 'orders_order_code_idx' && attempt < 4) {
+          continue;
+        }
         throw error;
       }
-    });
+    }
   } catch (error) {
     if (error.status) return sendJsonError(res, error.status, error.message);
     return next(error);
@@ -699,7 +710,7 @@ app.get('/api/orders/:orderCode/status', async (req, res, next) => {
   try {
     const order = await get(
       `SELECT order_code, approval_status, status, approved_at, invoice_token_hash
-       FROM orders WHERE order_code = ?`,
+       FROM orders WHERE order_code = $1`,
       [req.params.orderCode]
     );
     if (!order) return sendJsonError(res, 404, 'Order not found.');
@@ -722,7 +733,7 @@ app.get('/api/orders/:orderCode/status', async (req, res, next) => {
 
 app.get('/api/orders/:orderCode/invoice', async (req, res, next) => {
   try {
-    const order = await get('SELECT * FROM orders WHERE order_code = ?', [req.params.orderCode]);
+    const order = await get('SELECT * FROM orders WHERE order_code = $1', [req.params.orderCode]);
     if (!order) return sendJsonError(res, 404, 'Order not found.');
     if (!isOwner(req)) {
       const token = typeof req.get('X-Order-Access') === 'string'
@@ -739,7 +750,7 @@ app.get('/api/orders/:orderCode/invoice', async (req, res, next) => {
       return sendJsonError(res, 409, 'The GST invoice will be available after the order is approved.');
     }
     order.items = await all(
-      'SELECT brand, model, tyre_size, quantity, unit_price, subtotal_amount, gst_amount FROM order_items WHERE order_id = ? ORDER BY id',
+      'SELECT brand, model, tyre_size, quantity, unit_price, subtotal_amount, gst_amount FROM order_items WHERE order_id = $1 ORDER BY id',
       [order.id]
     );
     const pdf = makeInvoicePdf(order);
@@ -790,8 +801,8 @@ app.post('/api/admin/login', async (req, res, next) => {
   const token = signSession({ owner: true, expiresAt: now + SESSION_LIFETIME });
   res.cookie(SESSION_COOKIE, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    secure: Boolean(FRONTEND_ORIGIN) || process.env.NODE_ENV === 'production',
+    sameSite: FRONTEND_ORIGIN ? 'none' : 'strict',
     maxAge: SESSION_LIFETIME,
     path: '/'
   });
@@ -803,8 +814,8 @@ app.get('/api/admin/me', requireOwner, (req, res) => res.json({ authenticated: t
 app.post('/api/admin/logout', requireOwner, (req, res) => {
   res.clearCookie(SESSION_COOKIE, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    secure: Boolean(FRONTEND_ORIGIN) || process.env.NODE_ENV === 'production',
+    sameSite: FRONTEND_ORIGIN ? 'none' : 'strict',
     path: '/'
   });
   res.status(204).end();
@@ -827,18 +838,18 @@ app.get('/api/admin/dashboard', requireOwner, async (req, res, next) => {
        FROM orders ORDER BY id DESC LIMIT 8`
     );
     const dailySales = await all(
-      `SELECT date(approved_at) AS period, SUM(total_amount) AS revenue
+      `SELECT TO_CHAR(approved_at, 'YYYY-MM-DD') AS period, SUM(total_amount) AS revenue
        FROM orders
        WHERE approval_status = 'Approved & Dispatched' AND approved_at IS NOT NULL
-         AND date(approved_at) >= date('now', '-29 days')
-       GROUP BY date(approved_at) ORDER BY period`
+         AND approved_at >= CURRENT_DATE - INTERVAL '29 days'
+       GROUP BY TO_CHAR(approved_at, 'YYYY-MM-DD') ORDER BY period`
     );
     const monthlySales = await all(
-      `SELECT strftime('%Y-%m', approved_at) AS period, SUM(total_amount) AS revenue
+      `SELECT TO_CHAR(approved_at, 'YYYY-MM') AS period, SUM(total_amount) AS revenue
        FROM orders
        WHERE approval_status = 'Approved & Dispatched' AND approved_at IS NOT NULL
-         AND date(approved_at) >= date('now', 'start of month', '-11 months')
-       GROUP BY strftime('%Y-%m', approved_at) ORDER BY period`
+         AND approved_at >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '11 months'
+       GROUP BY TO_CHAR(approved_at, 'YYYY-MM') ORDER BY period`
     );
     const brandSales = await all(
       `SELECT oi.brand, SUM(oi.subtotal_amount + oi.gst_amount) AS revenue
@@ -849,7 +860,7 @@ app.get('/api/admin/dashboard', requireOwner, async (req, res, next) => {
     const approvedSales = await all(
       `SELECT order_code, brand, model, total_amount AS revenue, quantity, approved_at
        FROM orders WHERE approval_status = 'Approved & Dispatched' AND approved_at IS NOT NULL
-         AND date(approved_at) >= date('now', '-29 days')
+         AND approved_at >= CURRENT_DATE - INTERVAL '29 days'
        ORDER BY approved_at DESC LIMIT 500`
     );
     const stock = await get('SELECT COUNT(*) AS low_stock_count FROM products WHERE stock_quantity <= 5');
@@ -880,8 +891,8 @@ app.get('/api/orders', requireOwner, async (req, res, next) => {
     if (!orderIds.length) return res.json([]);
     const items = await all(
       `SELECT order_id, product_id, brand, model, tyre_size, quantity, unit_price, subtotal_amount, gst_amount
-       FROM order_items WHERE order_id IN (${orderIds.map(() => '?').join(',')}) ORDER BY id`,
-      orderIds
+       FROM order_items WHERE order_id = ANY($1::integer[]) ORDER BY id`,
+      [orderIds]
     );
     const itemsByOrder = new Map();
     items.forEach((item) => {
@@ -909,13 +920,13 @@ app.put('/api/admin/storefront-settings', requireOwner, async (req, res, next) =
   }
   const diwaliOffer = req.body.diwaliOffer.trim();
   try {
-    await withWriteLock(() => run(
+    await run(
       `INSERT INTO app_settings (setting_key, setting_value, updated_at)
-       VALUES ('diwali_offer', ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(setting_key) DO UPDATE SET
+       VALUES ('diwali_offer', $1, CURRENT_TIMESTAMP)
+       ON CONFLICT (setting_key) DO UPDATE SET
          setting_value = excluded.setting_value, updated_at = CURRENT_TIMESTAMP`,
       [diwaliOffer]
-    ));
+    );
     res.json({ diwaliOffer });
   } catch (error) {
     next(error);
@@ -924,13 +935,12 @@ app.put('/api/admin/storefront-settings', requireOwner, async (req, res, next) =
 
 app.post('/api/admin/orders/:id/approve', requireOwner, async (req, res, next) => {
   try {
-    const approved = await withWriteLock(async () => {
-      await run('BEGIN IMMEDIATE');
-      try {
+    const approved = await withTransaction(async (client) => {
         const order = await get(
           `SELECT id, order_code, approval_status, status, quantity, total_amount
-           FROM orders WHERE id = ?`,
-          [req.params.id]
+           FROM orders WHERE id = $1 FOR UPDATE`,
+          [req.params.id],
+          client
         );
         if (!order) {
           const error = new Error('Order not found.');
@@ -942,32 +952,29 @@ app.post('/api/admin/orders/:id/approve', requireOwner, async (req, res, next) =
           error.status = 409;
           throw error;
         }
-        const result = await run(
+        const result = await get(
           `UPDATE orders
            SET approval_status = 'Approved & Dispatched', status = 'Shipped',
                approved_at = CURRENT_TIMESTAMP
-           WHERE id = ? AND approval_status = 'Pending Approval' AND status != 'Cancelled'`,
-          [order.id]
+           WHERE id = $1 AND approval_status = 'Pending Approval' AND status != 'Cancelled'
+           RETURNING approved_at`,
+          [order.id],
+          client
         );
-        if (result.changes !== 1) {
+        if (!result) {
           const error = new Error('This order has already been processed.');
           error.status = 409;
           throw error;
         }
-        await run('COMMIT');
         return {
           id: order.id,
           orderCode: order.order_code,
           approvalStatus: 'Approved & Dispatched',
           status: 'Shipped',
-          approvedAt: (await get('SELECT approved_at FROM orders WHERE id = ?', [order.id])).approved_at,
+          approvedAt: result.approved_at,
           totalAmount: order.total_amount,
           quantity: order.quantity
         };
-      } catch (error) {
-        await run('ROLLBACK');
-        throw error;
-      }
     });
     res.json(approved);
   } catch (error) {
@@ -981,12 +988,11 @@ app.patch('/api/orders/:id/status', requireOwner, async (req, res, next) => {
     return sendJsonError(res, 400, 'Choose a valid order status.');
   }
   try {
-    const updated = await withWriteLock(async () => {
-      await run('BEGIN IMMEDIATE');
-      try {
+    const updated = await withTransaction(async (client) => {
         const order = await get(
-          'SELECT id, status, approval_status FROM orders WHERE id = ?',
-          [req.params.id]
+          'SELECT id, status, approval_status FROM orders WHERE id = $1 FOR UPDATE',
+          [req.params.id],
+          client
         );
         if (!order) {
           const error = new Error('Order not found.');
@@ -1018,25 +1024,25 @@ app.patch('/api/orders/:id/status', requireOwner, async (req, res, next) => {
           order.status !== 'Cancelled' &&
           order.approval_status === 'Pending Approval'
         ) {
-          const items = await all('SELECT product_id, quantity FROM order_items WHERE order_id = ?', [order.id]);
+          const items = await all(
+            'SELECT product_id, quantity FROM order_items WHERE order_id = $1 ORDER BY product_id, id',
+            [order.id],
+            client
+          );
           for (const item of items) {
             if (!item.product_id) continue;
             await run(
-              'UPDATE products SET stock_quantity = stock_quantity + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-              [item.quantity, item.product_id]
+              'UPDATE products SET stock_quantity = stock_quantity + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+              [item.quantity, item.product_id],
+              client
             );
           }
         }
-        await run('UPDATE orders SET status = ? WHERE id = ?', [req.body.status, req.params.id]);
+        await run('UPDATE orders SET status = $1 WHERE id = $2', [req.body.status, req.params.id], client);
         if (req.body.status === 'Cancelled' && order.approval_status === 'Pending Approval') {
-          await run("UPDATE orders SET approval_status = 'Rejected' WHERE id = ?", [req.params.id]);
+          await run("UPDATE orders SET approval_status = 'Rejected' WHERE id = $1", [req.params.id], client);
         }
-        await run('COMMIT');
         return { id: order.id, status: req.body.status };
-      } catch (error) {
-        await run('ROLLBACK');
-        throw error;
-      }
     });
     res.json(updated);
   } catch (error) {
@@ -1048,7 +1054,8 @@ app.patch('/api/orders/:id/status', requireOwner, async (req, res, next) => {
 app.get('/api/admin/customers', requireOwner, async (req, res, next) => {
   try {
     res.json(await all(
-      `SELECT customer_name AS full_name, phone, email,
+      `SELECT (ARRAY_AGG(customer_name ORDER BY created_at DESC))[1] AS full_name,
+              (ARRAY_AGG(phone ORDER BY created_at DESC))[1] AS phone, email,
               COUNT(*) AS order_count,
               SUM(CASE WHEN approval_status = 'Approved & Dispatched' THEN total_amount ELSE 0 END) AS total_spent,
               MAX(created_at) AS last_order
@@ -1062,7 +1069,7 @@ app.get('/api/admin/customers', requireOwner, async (req, res, next) => {
 app.get('/api/admin/customers/:email/orders', requireOwner, async (req, res, next) => {
   try {
     res.json(await all(
-      'SELECT * FROM orders WHERE email = ? ORDER BY id DESC',
+      'SELECT * FROM orders WHERE email = $1 ORDER BY id DESC',
       [req.params.email]
     ));
   } catch (error) {
@@ -1074,15 +1081,16 @@ app.post('/api/products', requireOwner, async (req, res, next) => {
   const invalid = validateProduct(req.body);
   if (invalid) return sendJsonError(res, 400, invalid);
   try {
-    const result = await withWriteLock(() => run(
+    const result = await run(
       `INSERT INTO products
        (brand, model, tyre_size, rim_size, vehicle_type, price, discount, stock_quantity, image_url)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id`,
       productValues(req.body)
-    ));
-    res.status(201).json(await get('SELECT * FROM products WHERE id = ?', [result.id]));
+    );
+    res.status(201).json(await get('SELECT * FROM products WHERE id = $1', [result.id]));
   } catch (error) {
-    if (error.code === 'SQLITE_CONSTRAINT') return sendJsonError(res, 409, 'This tyre is already in the catalog.');
+    if (error.code === '23505') return sendJsonError(res, 409, 'This tyre is already in the catalog.');
     next(error);
   }
 });
@@ -1091,23 +1099,23 @@ app.put('/api/products/:id', requireOwner, async (req, res, next) => {
   const invalid = validateProduct(req.body);
   if (invalid) return sendJsonError(res, 400, invalid);
   try {
-    const result = await withWriteLock(() => run(
-      `UPDATE products SET brand = ?, model = ?, tyre_size = ?, rim_size = ?, vehicle_type = ?,
-       price = ?, discount = ?, stock_quantity = ?, image_url = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
+    const result = await run(
+      `UPDATE products SET brand = $1, model = $2, tyre_size = $3, rim_size = $4, vehicle_type = $5,
+       price = $6, discount = $7, stock_quantity = $8, image_url = $9, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $10`,
       [...productValues(req.body), req.params.id]
-    ));
+    );
     if (!result.changes) return sendJsonError(res, 404, 'Tyre not found.');
-    res.json(await get('SELECT * FROM products WHERE id = ?', [req.params.id]));
+    res.json(await get('SELECT * FROM products WHERE id = $1', [req.params.id]));
   } catch (error) {
-    if (error.code === 'SQLITE_CONSTRAINT') return sendJsonError(res, 409, 'This tyre is already in the catalog.');
+    if (error.code === '23505') return sendJsonError(res, 409, 'This tyre is already in the catalog.');
     next(error);
   }
 });
 
 app.delete('/api/products/:id', requireOwner, async (req, res, next) => {
   try {
-    const result = await withWriteLock(() => run('DELETE FROM products WHERE id = ?', [req.params.id]));
+    const result = await run('DELETE FROM products WHERE id = $1', [req.params.id]);
     if (!result.changes) return sendJsonError(res, 404, 'Tyre not found.');
     res.status(204).end();
   } catch (error) {
@@ -1125,188 +1133,41 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: 'A server error occurred. Please try again.' });
 });
 
-async function initializeDatabase() {
-  await run('PRAGMA foreign_keys = ON');
-  await run('PRAGMA journal_mode = WAL');
-  await run('PRAGMA busy_timeout = 5000');
-  await run(`CREATE TABLE IF NOT EXISTS products (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    brand TEXT NOT NULL,
-    model TEXT NOT NULL,
-    tyre_size TEXT NOT NULL,
-    rim_size TEXT NOT NULL,
-    vehicle_type TEXT NOT NULL,
-    price REAL NOT NULL CHECK (price >= 0),
-    discount REAL NOT NULL DEFAULT 0 CHECK (discount >= 0 AND discount <= 100),
-    stock_quantity INTEGER NOT NULL DEFAULT 0 CHECK (stock_quantity >= 0),
-    image_url TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (brand, model, tyre_size)
-  )`);
-  await run(`CREATE TABLE IF NOT EXISTS orders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    customer_name TEXT NOT NULL,
-    phone TEXT NOT NULL,
-    email TEXT NOT NULL,
-    address TEXT NOT NULL,
-    landmark TEXT NOT NULL DEFAULT '',
-    pincode TEXT NOT NULL,
-    city TEXT NOT NULL,
-    state TEXT NOT NULL,
-    vehicle_details TEXT NOT NULL DEFAULT '',
-    product_id INTEGER,
-    brand TEXT NOT NULL,
-    model TEXT NOT NULL,
-    tyre_size TEXT NOT NULL,
-    quantity INTEGER NOT NULL CHECK (quantity > 0),
-    unit_price REAL NOT NULL CHECK (unit_price >= 0),
-    total_amount REAL NOT NULL CHECK (total_amount >= 0),
-    payment_method TEXT NOT NULL CHECK (payment_method IN ('cod', 'upi', 'online')),
-    payment_status TEXT NOT NULL DEFAULT 'Pending',
-    status TEXT NOT NULL DEFAULT 'Pending'
-      CHECK (status IN ('Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled')),
-    order_code TEXT,
-    subtotal_amount REAL NOT NULL DEFAULT 0,
-    gst_amount REAL NOT NULL DEFAULT 0,
-    delivery_amount REAL NOT NULL DEFAULT 0,
-    approval_status TEXT NOT NULL DEFAULT 'Approved & Dispatched',
-    approved_at TEXT,
-    invoice_token_hash TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
-  )`);
-  const orderColumns = await all('PRAGMA table_info(orders)');
-  const existingColumns = new Set(orderColumns.map((column) => column.name));
-  const migrations = [
-    ['order_code', 'TEXT'],
-    ['subtotal_amount', 'REAL NOT NULL DEFAULT 0'],
-    ['gst_amount', 'REAL NOT NULL DEFAULT 0'],
-    ['delivery_amount', 'REAL NOT NULL DEFAULT 0'],
-    ["approval_status", "TEXT NOT NULL DEFAULT 'Approved & Dispatched'"],
-    ['approved_at', 'TEXT'],
-    ['invoice_token_hash', 'TEXT']
-  ];
-  for (const [column, definition] of migrations) {
-    if (!existingColumns.has(column)) {
-      await run(`ALTER TABLE orders ADD COLUMN ${column} ${definition}`);
-    }
-  }
-  await run(
-    `UPDATE orders SET subtotal_amount = total_amount
-     WHERE subtotal_amount = 0 AND total_amount > 0`
-  );
-  await run(
-    `UPDATE orders SET approved_at = created_at
-     WHERE approval_status = 'Approved & Dispatched' AND approved_at IS NULL`
-  );
-  const legacyOrders = await all('SELECT id, created_at FROM orders WHERE order_code IS NULL');
-  for (const order of legacyOrders) {
-    const year = String(order.created_at || new Date().toISOString()).slice(0, 4);
-    await run('UPDATE orders SET order_code = ? WHERE id = ?', [
-      `APX-${year}-${String(order.id).padStart(6, '0')}`,
-      order.id
-    ]);
-  }
-  await run('CREATE UNIQUE INDEX IF NOT EXISTS orders_order_code_idx ON orders(order_code)');
-  await run('CREATE INDEX IF NOT EXISTS orders_created_at_idx ON orders(created_at DESC)');
-  await run(`CREATE TABLE IF NOT EXISTS order_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    order_id INTEGER NOT NULL,
-    product_id INTEGER,
-    brand TEXT NOT NULL,
-    model TEXT NOT NULL,
-    tyre_size TEXT NOT NULL,
-    quantity INTEGER NOT NULL CHECK (quantity > 0),
-    unit_price REAL NOT NULL CHECK (unit_price >= 0),
-    subtotal_amount REAL NOT NULL CHECK (subtotal_amount >= 0),
-    gst_amount REAL NOT NULL DEFAULT 0 CHECK (gst_amount >= 0),
-    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
-    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL
-  )`);
-  await run('CREATE UNIQUE INDEX IF NOT EXISTS order_items_order_product_idx ON order_items(order_id, product_id)');
-  await run(
-    `INSERT OR IGNORE INTO order_items
-     (order_id, product_id, brand, model, tyre_size, quantity, unit_price, subtotal_amount, gst_amount)
-     SELECT orders.id, orders.product_id, orders.brand, orders.model, orders.tyre_size,
-            orders.quantity, orders.unit_price, orders.subtotal_amount, orders.gst_amount
-     FROM orders
-     WHERE NOT EXISTS (SELECT 1 FROM order_items WHERE order_items.order_id = orders.id)`
-  );
-  await run(`CREATE TABLE IF NOT EXISTS app_settings (
-    setting_key TEXT PRIMARY KEY,
-    setting_value TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-  )`);
-  await run(
-    `INSERT OR IGNORE INTO app_settings (setting_key, setting_value)
-     VALUES ('diwali_offer', '🪔 Diwali Drive Offers: Find the right tyres for every journey—contact ApexTyre for current deals.')`
-  );
-
-  const sampleProducts = [
-    ['MRF', 'ZVTV', '195/55 R16', '16', 'Car', 7100, 0, 8, 'https://images.unsplash.com/photo-1542377281-73d08e3a10aa?auto=format&fit=crop&w=1200&q=90'],
-    ['Apollo', 'Alnac 4G', '195/55 R16', '16', 'Car', 7600, 0, 10, 'https://images.unsplash.com/photo-1571335746824-742511d49bce?auto=format&fit=crop&w=1200&q=90'],
-    ['CEAT', 'SecuraDrive', '185/65 R15', '15', 'Car', 6200, 5, 12, 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?auto=format&fit=crop&w=1200&q=90'],
-    ['Michelin', 'Primacy 4', '205/55 R16', '16', 'Car', 12500, 0, 6, 'https://images.unsplash.com/photo-1571335746824-742511d49bce?auto=format&fit=crop&w=1200&q=90'],
-    ['Bridgestone', 'Turanza 6', '215/60 R16', '16', 'SUV', 10800, 0, 7, 'https://images.unsplash.com/photo-1542377281-73d08e3a10aa?auto=format&fit=crop&w=1200&q=90'],
-    ['Goodyear', 'Eagle F1', '225/45 R17', '17', 'Sports Car', 13800, 0, 5, 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?auto=format&fit=crop&w=1200&q=90'],
-    ['Apollo', 'ActiGrip S4', '90/90-17', '17', 'Bike', 2450, 8, 20, 'https://images.unsplash.com/photo-1620223200930-2e719f329f07?auto=format&fit=crop&w=1200&q=90'],
-    ['JK Tyre', 'UX Royale', '185/65 R15', '15', 'Car', 5900, 0, 9, 'https://images.unsplash.com/photo-1542377281-73d08e3a10aa?auto=format&fit=crop&w=1200&q=90'],
-    ['TVS Eurogrip', 'Pancer', '90/90-17', '17', 'Bike', 2200, 0, 16, 'https://images.unsplash.com/photo-1620223200930-2e719f329f07?auto=format&fit=crop&w=1200&q=90'],
-    ['Ralco', 'Blaster', '90/90-17', '17', 'Bike', 1850, 0, 14, 'https://images.unsplash.com/photo-1612692064035-df2d74a77cb8?auto=format&fit=crop&w=1200&q=90'],
-    ['Maxxis', 'MA-P5', '195/55 R16', '16', 'Car', 6800, 0, 7, 'https://images.unsplash.com/photo-1571335746824-742511d49bce?auto=format&fit=crop&w=1200&q=90'],
-    ['Continental', 'UltraContact UC6', '205/55 R16', '16', 'Car', 11400, 0, 5, 'https://images.unsplash.com/photo-1542377281-73d08e3a10aa?auto=format&fit=crop&w=1200&q=90'],
-    ['Yokohama', 'BluEarth GT AE51', '205/55 R16', '16', 'Car', 9900, 0, 6, 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?auto=format&fit=crop&w=1200&q=90']
-  ];
-  for (const values of sampleProducts) {
-    await run(
-      `INSERT OR IGNORE INTO products
-       (brand, model, tyre_size, rim_size, vehicle_type, price, discount, stock_quantity, image_url)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      values
-    );
-    await run(
-      `UPDATE products SET image_url = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE brand = ? AND model = ? AND image_url = ''`,
-      [values[8], values[0], values[1]]
-    );
-    await run(
-      `UPDATE products SET image_url = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE brand = ? AND model = ? AND (
-         image_url = '' OR
-         image_url LIKE '%photo-1558618666-fcd25c85cd64%' OR
-         image_url LIKE '%photo-1542377281-73d08e3a10aa%' OR
-         image_url LIKE '%photo-1571335746824-742511d49bce%' OR
-         image_url LIKE '%photo-1620223200930-2e719f329f07%' OR
-         image_url LIKE '%photo-1612692064035-df2d74a77cb8%'
-       )`,
-      [values[8], values[0], values[1]]
-    );
-  }
-}
-
 async function start() {
   try {
     await initializeDatabase();
     const server = app.listen(PORT, () => {
-      console.log(`ApexTyre is running at http://localhost:${PORT}`);
-      console.log(`SQLite database: ${DB_PATH}`);
+      console.log(`ApexTyre is running at http://localhost:${server.address().port}`);
+      console.log('PostgreSQL connection: connected.');
       if (!process.env.ADMIN_PASSWORD) {
         console.warn('Set ADMIN_PASSWORD in .env to enable secure owner dashboard login.');
       }
     });
+    server.on('error', (error) => {
+      console.error('Could not start ApexTyre server:', error);
+      process.exitCode = 1;
+    });
 
     const shutdown = () => {
-      server.close(() => db.close((error) => {
-        if (error) console.error('Error closing SQLite database:', error);
-        process.exit(error ? 1 : 0);
-      }));
+      server.close(async () => {
+        try {
+          await pool.end();
+        } catch (error) {
+          console.error('Error closing PostgreSQL pool:', error);
+          process.exitCode = 1;
+        }
+      });
     };
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
   } catch (error) {
     console.error('Could not initialize ApexTyre:', error);
-    db.close(() => process.exit(1));
+    try {
+      await pool.end();
+    } catch (closeError) {
+      console.error('Error closing PostgreSQL pool after startup failure:', closeError);
+    }
+    process.exitCode = 1;
   }
 }
 

@@ -1,3 +1,29 @@
+const API_BASE_URL = window.APEXTYRE_API_URL ||
+  (['localhost', '127.0.0.1'].includes(window.location.hostname) ? window.location.origin : '');
+
+function apiUrl(path) {
+  if (!API_BASE_URL) throw new Error('Set APEXTYRE_API_URL in api-config.js to your Render backend URL.');
+  return new URL(path, `${API_BASE_URL.replace(/\/+$/, '')}/`).toString();
+}
+
+function apiFetch(path, options = {}) {
+  const headers = {
+    ...(options.method?.toUpperCase() === 'POST' ? { 'Content-Type': 'application/json' } : {}),
+    ...options.headers,
+    'ngrok-skip-browser-warning': 'true'
+  };
+  return fetch(apiUrl(path), {
+    ...options,
+    credentials: 'include',
+    headers
+  }).catch((error) => {
+    if (error instanceof TypeError) {
+      throw new Error(`Could not reach the ApexTyre API at ${API_BASE_URL}. Check the Render service and CORS configuration.`);
+    }
+    throw error;
+  });
+}
+
 const loginPanel = document.querySelector('#login-panel');
 const dashboardPanel = document.querySelector('#dashboard-panel');
 const adminNav = document.querySelector('#admin-nav');
@@ -44,7 +70,7 @@ function safe(value) {
 }
 
 async function api(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     ...options,
     headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers }
   });
@@ -339,7 +365,7 @@ function renderOrders(orders) {
         ? `<button class="button button-primary approve-order" data-order="${safe(order.id)}" type="button">${items.some((item) => !item.product_id) ? 'Confirm & Approve' : 'Approve Order'}</button>`
         : '',
       approvalStatus === 'Approved & Dispatched'
-        ? `<a class="text-button invoice-download" href="/api/orders/${encodeURIComponent(order.order_code)}/invoice">Download PDF invoice</a>`
+        ? `<a class="text-button invoice-download" href="${apiUrl(`/api/orders/${encodeURIComponent(order.order_code)}/invoice`)}">Download PDF invoice</a>`
         : ''
     ].filter(Boolean).join('');
     return `<tr>
@@ -359,7 +385,9 @@ function renderOrders(orders) {
     button.addEventListener('click', async () => {
       button.disabled = true;
       try {
-        const approved = await api(`/api/admin/orders/${button.dataset.order}/approve`, { method: 'POST' });
+        const approved = await api(`/api/admin/orders/${button.dataset.order}/approve`, {
+          method: 'POST', body: JSON.stringify({})
+        });
         showToast(`${approved.orderCode} approved. Revenue and sales chart updated.`);
         await refreshDashboard();
       } catch (error) {
@@ -474,7 +502,7 @@ loginForm.addEventListener('submit', async (event) => {
 
 document.querySelector('#logout-button').addEventListener('click', async () => {
   try {
-    await api('/api/admin/logout', { method: 'POST' });
+    await api('/api/admin/logout', { method: 'POST', body: JSON.stringify({}) });
     dashboardPanel.hidden = true;
     adminNav.hidden = true;
     loginPanel.hidden = false;
