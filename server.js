@@ -58,6 +58,42 @@ async function sendResendEmail(message) {
   }
 }
 
+async function sendOrderApprovalEmail(order) {
+  const items = await all(
+    `SELECT brand, model, tyre_size, quantity, subtotal_amount
+     FROM order_items WHERE order_id = $1 ORDER BY id`,
+    [order.id]
+  );
+  const currency = new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+  const formatMoney = (amount) => currency.format(Number(amount) || 0);
+  const itemRows = items.map((item) =>
+    `<li>${escapeHtml(item.brand)} ${escapeHtml(item.model)} (${escapeHtml(item.tyre_size)}) — Qty ${item.quantity}, ${formatMoney(item.subtotal_amount)}</li>`
+  ).join('');
+  const html = `<h2>Your ApexTyre order is approved</h2>
+    <p>Hello ${escapeHtml(order.customerName)},</p>
+    <p>Your order <strong>${escapeHtml(order.orderCode)}</strong> has been approved.</p>
+    <p><strong>Order ID:</strong> ${escapeHtml(order.orderCode)}<br>
+    <strong>Status:</strong> ${escapeHtml(order.approvalStatus)}<br>
+    <strong>Order status:</strong> ${escapeHtml(order.status)}</p>
+    <p><strong>Items:</strong></p><ul>${itemRows}</ul>
+    <p><strong>Subtotal:</strong> ${formatMoney(order.subtotalAmount)}<br>
+    <strong>Delivery:</strong> ${formatMoney(order.deliveryAmount)}<br>
+    <strong>GST:</strong> ${formatMoney(order.gstAmount)}<br>
+    <strong>Total:</strong> ${formatMoney(order.totalAmount)}</p>
+    <p>Thank you for shopping with ApexTyre.</p>`;
+
+  await sendResendEmail({
+    recipient: order.customerEmail,
+    subject: `ApexTyre order ${order.orderCode} approved`,
+    html
+  });
+}
+
 function validateProduct(product) {
   if (!product || typeof product !== 'object' || Array.isArray(product)) {
     return 'Product details must be sent as an object.';
@@ -951,7 +987,8 @@ app.post('/api/admin/orders/:id/approve', requireOwner, async (req, res, next) =
   try {
     const approved = await withTransaction(async (client) => {
         const order = await get(
-          `SELECT id, order_code, approval_status, status, quantity, total_amount
+          `SELECT id, order_code, approval_status, status, quantity, total_amount,
+                  customer_name, email, subtotal_amount, delivery_amount, gst_amount
            FROM orders WHERE id = $1 FOR UPDATE`,
           [req.params.id],
           client
@@ -981,16 +1018,42 @@ app.post('/api/admin/orders/:id/approve', requireOwner, async (req, res, next) =
           throw error;
         }
         return {
-          id: order.id,
-          orderCode: order.order_code,
-          approvalStatus: 'Approved & Dispatched',
-          status: 'Shipped',
-          approvedAt: result.approved_at,
-          totalAmount: order.total_amount,
-          quantity: order.quantity
+          response: {
+            id: order.id,
+            orderCode: order.order_code,
+            approvalStatus: 'Approved & Dispatched',
+            status: 'Shipped',
+            approvedAt: result.approved_at,
+            totalAmount: order.total_amount,
+            quantity: order.quantity
+          },
+          notification: {
+            id: order.id,
+            orderCode: order.order_code,
+            customerName: order.customer_name,
+            customerEmail: order.email,
+            approvalStatus: 'Approved & Dispatched',
+            status: 'Shipped',
+            subtotalAmount: order.subtotal_amount,
+            deliveryAmount: order.delivery_amount,
+            gstAmount: order.gst_amount,
+            totalAmount: order.total_amount
+          }
         };
     });
-    res.json(approved);
+    res.json(approved.response);
+    if (RESEND_API_KEY && EMAIL_FROM) {
+      setImmediate(() => {
+        void sendOrderApprovalEmail(approved.notification)
+          .then(() => {
+            console.log(`Order ${approved.response.orderCode} approval email accepted for customer.`);
+          })
+          .catch((error) => {
+            const detail = Number.isInteger(error?.status) ? `HTTP ${error.status}` : 'network or timeout error';
+            console.error(`Could not send approval email for order ${approved.response.orderCode} (${detail}).`);
+          });
+      });
+    }
   } catch (error) {
     if (error.status) return sendJsonError(res, error.status, error.message);
     next(error);
