@@ -33,6 +33,13 @@ function sendJsonError(res, status, message) {
   return res.status(status).json({ error: message });
 }
 
+function logCustomerAuthFailure(operation, reason, error) {
+  const errorCode = typeof error?.code === 'string' && /^[A-Z0-9]{5}$/.test(error.code)
+    ? error.code
+    : 'none';
+  console.warn(`[customer-auth] ${operation} failed; reason=${reason}; code=${errorCode}`);
+}
+
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
@@ -537,6 +544,7 @@ app.post(
   async (req, res, next) => {
     const body = req.body;
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      logCustomerAuthFailure('registration', 'invalid_body');
       return sendJsonError(res, 400, 'Enter valid registration details.');
     }
 
@@ -547,19 +555,23 @@ app.post(
     const mobileNumber = typeof body.mobileNumber === 'string' ? body.mobileNumber.trim() : '';
     const password = typeof body.password === 'string' ? body.password : '';
     if (Array.from(password).length < 6) {
+      logCustomerAuthFailure('registration', 'password_policy');
       return sendJsonError(res, 400, 'Password must be at least 6 characters long.');
     }
     if (fullName.length < 2 || fullName.length > 100 ||
         !email || email.length > 254 || !isValidEmail(email) ||
         !/^(?=.*\d)[0-9+() -]{8,20}$/.test(mobileNumber) ||
         Buffer.byteLength(password, 'utf8') > 72) {
+      logCustomerAuthFailure('registration', 'invalid_details');
       return sendJsonError(res, 400, 'Check your name, email, mobile number, and password requirements.');
     }
 
+    let stage = 'password_hash';
     try {
       const passwordHash = await bcrypt.hash(password, 12);
+      stage = 'account_insert';
       await withTransaction(async (client) => {
-        await get(
+        const account = await get(
           `INSERT INTO public.customer_accounts
              (full_name, email, mobile_number, password_hash, email_verified)
            VALUES ($1, $2, $3, $4, FALSE)
@@ -567,18 +579,24 @@ app.post(
           [fullName, email, mobileNumber, passwordHash],
           client
         );
+        if (!account?.id) throw new Error('Customer account insert returned no ID.');
       });
 
-      return res.status(202).json({
-        message: 'If registration can proceed, you can sign in using that email and password.'
+      console.info('[customer-auth] registration completed; outcome=created');
+      return res.status(201).json({
+        created: true,
+        message: 'Account created. You can now sign in.'
       });
     } catch (error) {
       if (error.code === '23505' && error.constraint === 'customer_accounts_email_key') {
-        return res.status(202).json({
-          message: 'If registration can proceed, you can sign in using that email and password.'
+        console.info('[customer-auth] registration completed; outcome=existing');
+        return res.status(200).json({
+          created: false,
+          message: 'An account already exists for this email. Sign in instead.'
         });
       }
-      return next(error);
+      logCustomerAuthFailure('registration', stage, error);
+      return next(new Error('Customer registration failed.'));
     }
   }
 );
@@ -592,9 +610,11 @@ app.post(
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
     if (!email || email.length > 254 || !isValidEmail(email) ||
         !password || Buffer.byteLength(password, 'utf8') > 72) {
+      logCustomerAuthFailure('login', 'invalid_input');
       return sendJsonError(res, 400, 'Enter a valid email address and password.');
     }
 
+    let stage = 'account_lookup';
     try {
       const account = await get(
         `SELECT id, password_hash
@@ -602,25 +622,34 @@ app.post(
          WHERE email = $1`,
         [email]
       );
-      const passwordMatches = account
-        ? await bcrypt.compare(password, account.password_hash)
-        : false;
-      if (!account || !passwordMatches) {
+      if (!account) {
+        logCustomerAuthFailure('login', 'account_not_found');
         return sendJsonError(res, 401, 'Email or password is incorrect.');
       }
 
+      stage = 'password_compare';
+      const passwordMatches = await bcrypt.compare(password, account.password_hash);
+      if (!passwordMatches) {
+        logCustomerAuthFailure('login', 'password_mismatch');
+        return sendJsonError(res, 401, 'Email or password is incorrect.');
+      }
+
+      stage = 'session_create';
       const token = generateCustomerSessionToken();
       const tokenHash = hashCustomerSessionToken(token);
-      await run(
+      const session = await run(
         `INSERT INTO public.customer_sessions (customer_id, token_hash, expires_at)
          VALUES ($1, $2, CURRENT_TIMESTAMP + ($3::integer * INTERVAL '1 millisecond'))`,
         [account.id, tokenHash, CUSTOMER_SESSION_LIFETIME]
       );
+      if (session.changes !== 1) throw new Error('Customer session insert failed.');
       setCustomerSessionCookie(res, token);
       res.set('Cache-Control', 'no-store');
+      console.info('[customer-auth] login completed; outcome=success');
       return res.json({ message: 'Signed in successfully.' });
     } catch (error) {
-      return next(error);
+      logCustomerAuthFailure('login', stage, error);
+      return next(new Error('Customer sign-in failed.'));
     }
   }
 );

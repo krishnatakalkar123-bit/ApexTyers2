@@ -267,6 +267,8 @@ test('storefront browsing and cart remain public, while checkout resumes after c
   assert.doesNotMatch(markup, /name="confirmPassword"/i);
   assert.match(registrationHandler, /customerApi\([\s\S]*?'\/api\/customer\/register'/);
   assert.match(registrationHandler, /Object\.fromEntries\(form\.entries\(\)\)/);
+  assert.match(registrationHandler, /const password = String\(form\.get\('password'\) \|\| ''\)/);
+  assert.doesNotMatch(registrationHandler, /password\.trim\(\)/);
   assert.match(registrationHandler, /Array\.from\(password\)\.length < 6/);
   assert.match(registrationHandler, /Password must be at least 6 characters long\./);
   assert.doesNotMatch(registrationHandler, /\/api\/customer\/login/);
@@ -325,7 +327,7 @@ test('OTP-free customer registration, secure sessions, authenticated customer or
     fullName: 'Avery Morgan',
     email: ' CUSTOMER@example.test ',
     mobileNumber: '9876543210',
-    password: 'A1bcde'
+    password: '  A1bcde  '
   };
   assert.deepEqual(Object.keys(registration), ['fullName', 'email', 'mobileNumber', 'password']);
 
@@ -357,8 +359,10 @@ test('OTP-free customer registration, secure sessions, authenticated customer or
     method: 'POST',
     body: registration
   });
-  assert.equal(registered.response.status, 202);
+  assert.equal(registered.response.status, 201);
+  assert.equal(registered.result.created, true);
   const firstAccount = state.accounts.get('customer@example.test');
+  assert.equal(firstAccount.email, 'customer@example.test');
   assert.ok(firstAccount.password_hash.startsWith('$2'));
   assert.notEqual(firstAccount.password_hash, registration.password);
   assert.equal(firstAccount.email_verified, false);
@@ -369,9 +373,17 @@ test('OTP-free customer registration, secure sessions, authenticated customer or
     method: 'POST',
     body: { ...registration, password: 'Different1' }
   });
-  assert.equal(duplicate.response.status, 202);
-  assert.equal(duplicate.result.message, registered.result.message);
+  assert.equal(duplicate.response.status, 200);
+  assert.equal(duplicate.result.created, false);
+  assert.match(duplicate.result.message, /already exists/i);
   assert.equal(state.accounts.size, 1);
+  const trimmedPasswordLogin = await request('/api/customer/login', {
+    method: 'POST',
+    body: { email: registration.email, password: registration.password.trim() }
+  });
+  assert.equal(trimmedPasswordLogin.response.status, 401);
+  assert.equal(trimmedPasswordLogin.response.headers.get('set-cookie'), null);
+  assert.equal(state.sessions.size, 0);
   const duplicatePasswordLogin = await request('/api/customer/login', {
     method: 'POST',
     body: { email: registration.email, password: 'Different1' }
@@ -463,7 +475,8 @@ test('OTP-free customer registration, secure sessions, authenticated customer or
     method: 'POST',
     body: secondRegistration
   });
-  assert.equal(secondRegistered.response.status, 202);
+  assert.equal(secondRegistered.response.status, 201);
+  assert.equal(secondRegistered.result.created, true);
   assert.equal(state.accounts.get('another@example.test').email_verified, false);
   const secondLogin = await request('/api/customer/login', {
     method: 'POST',
