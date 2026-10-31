@@ -11,9 +11,11 @@ process.env.ADMIN_USERNAME = 'test-owner';
 process.env.ADMIN_PASSWORD = 'test-owner-password';
 process.env.SESSION_SECRET = 'test-only-session-secret-with-more-than-32-characters';
 process.env.CUSTOMER_PASSWORD_RESET_SECRET = 'test-only-password-reset-secret-with-more-than-32-characters';
+process.env.FRONTEND_ORIGIN = 'https://brilliant-semifreddo-ca3b22.netlify.app';
 process.env.NODE_ENV = 'test';
 
 let now = Date.now();
+let activeClientIp = '198.51.100.10';
 const state = {
   accounts: new Map(),
   sessions: new Map(),
@@ -83,6 +85,15 @@ async function get(sql, params = []) {
         password_hash: account.password_hash
       }
       : undefined;
+  }
+  if (sql.includes('COUNT(*) FILTER') && sql.includes('FROM public.orders')) {
+    const customerOrders = state.orders.filter((order) => order.customer_id === Number(params[0]));
+    return {
+      total_orders: customerOrders.length,
+      pending_orders: customerOrders.filter((order) => order.approval_status === 'Pending Approval').length,
+      approved_orders: customerOrders.filter((order) => order.approval_status === 'Approved & Dispatched').length,
+      delivered_orders: customerOrders.filter((order) => order.status === 'Delivered').length
+    };
   }
   if (/SELECT id\s+FROM public\.customer_accounts/.test(sql)) {
     if (/WHERE id = \$1/.test(sql)) {
@@ -236,6 +247,7 @@ async function run(sql, params = []) {
       customer_name: params[offset],
       phone: params[offset + 1],
       email: params[offset + 2],
+      payment_status: params[offset + 20],
       order_code: params[offset + 21],
       approval_status: params[offset + 22],
       status: 'Pending',
@@ -334,8 +346,8 @@ after(async () => {
   });
 });
 
-async function request(path, { method = 'GET', body, cookie, originHeader = origin } = {}) {
-  const headers = { Origin: originHeader };
+async function request(path, { method = 'GET', body, cookie, originHeader = origin, clientIp = activeClientIp } = {}) {
+  const headers = { Origin: originHeader, 'X-Forwarded-For': clientIp };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (cookie) headers.Cookie = cookie;
   const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
@@ -351,6 +363,21 @@ function sessionCookie(response) {
   const setCookie = response.headers.get('set-cookie');
   assert.ok(setCookie?.startsWith('apextyre_customer='));
   assert.match(setCookie, /;\s*Path=\/api(?:;|$)/i);
+  assert.match(setCookie, /;\s*Max-Age=28800(?:;|$)/i);
+  assert.match(setCookie, /;\s*HttpOnly(?:;|$)/i);
+  assert.match(setCookie, /;\s*Secure(?:;|$)/i);
+  assert.match(setCookie, /;\s*SameSite=None(?:;|$)/i);
+  return setCookie.split(';', 1)[0];
+}
+
+function resetAuthorizationCookie(response) {
+  const setCookie = response.headers.get('set-cookie');
+  assert.ok(setCookie?.startsWith('apextyre_password_reset='));
+  assert.match(setCookie, /;\s*Path=\/api\/customer\/password-reset(?:;|$)/i);
+  assert.match(setCookie, /;\s*Max-Age=600(?:;|$)/i);
+  assert.match(setCookie, /;\s*HttpOnly(?:;|$)/i);
+  assert.match(setCookie, /;\s*Secure(?:;|$)/i);
+  assert.match(setCookie, /;\s*SameSite=None(?:;|$)/i);
   return setCookie.split(';', 1)[0];
 }
 
@@ -373,14 +400,16 @@ test('storefront browsing and cart remain public, while checkout resumes after c
   const registrationHandler = frontend.slice(registrationHandlerStart, registrationHandlerEnd);
   const addToCart = frontend.slice(addToCartStart, addToCartEnd);
 
-  assert.match(markup, /name="fullName"/);
+  assert.match(markup, /name="firstName"/);
+  assert.match(markup, /name="lastName"/);
   assert.match(markup, /name="email"/);
   assert.match(markup, /name="mobileNumber"/);
   assert.match(markup, /name="password"[^>]*maxlength="72"/);
-  assert.doesNotMatch(registrationMarkup, /name="confirmPassword"/i);
+  assert.match(registrationMarkup, /name="confirmPassword"/i);
   assert.match(registrationHandler, /customerApi\([\s\S]*?'\/api\/customer\/register'/);
   assert.match(registrationHandler, /Object\.fromEntries\(form\.entries\(\)\)/);
   assert.match(registrationHandler, /const password = String\(form\.get\('password'\) \|\| ''\)/);
+  assert.match(registrationHandler, /password !== confirmPassword/);
   assert.doesNotMatch(registrationHandler, /password\.trim\(\)/);
   assert.match(registrationHandler, /Array\.from\(password\)\.length < 6/);
   assert.match(registrationHandler, /Password must be at least 6 characters long\./);
@@ -404,6 +433,17 @@ test('storefront browsing and cart remain public, while checkout resumes after c
   assert.match(markup, /data-view-panel="customer-login"/);
   assert.match(markup, /data-view-panel="customer-register"/);
   assert.doesNotMatch(markup, /Guest Checkout/i);
+  assert.match(markup, /id="customer-welcome-name"/);
+  assert.match(markup, /id="customer-stat-total"/);
+  assert.match(markup, /id="customer-stat-pending"/);
+  assert.match(markup, /id="customer-stat-approved"/);
+  assert.match(markup, /id="customer-stat-delivered"/);
+  assert.match(markup, /data-dashboard-action="shop"/);
+  assert.match(markup, /data-dashboard-action="orders"/);
+  assert.match(markup, /data-dashboard-action="profile"/);
+  assert.match(frontend, /credentials: 'include'/);
+  assert.match(frontend, /void refreshCustomerSession\(\)/);
+  assert.doesNotMatch(frontend, /passwordResetToken/);
 });
 
 test('owner login remains separate from customer authentication', async () => {
@@ -437,12 +477,14 @@ test('OTP-free customer registration, secure sessions, authenticated customer or
   assert.deepEqual(publicCatalog.result, []);
 
   const registration = {
-    fullName: 'Avery Morgan',
+    firstName: 'Avery',
+    lastName: 'Morgan',
     email: ' CUSTOMER@example.test ',
     mobileNumber: '9876543210',
-    password: '  A1bcde  '
+    password: '  A1bcde  ',
+    confirmPassword: '  A1bcde  '
   };
-  assert.deepEqual(Object.keys(registration), ['fullName', 'email', 'mobileNumber', 'password']);
+  assert.deepEqual(Object.keys(registration), ['firstName', 'lastName', 'email', 'mobileNumber', 'password', 'confirmPassword']);
 
   const badOrigin = await request('/api/customer/register', {
     method: 'POST',
@@ -457,6 +499,22 @@ test('OTP-free customer registration, secure sessions, authenticated customer or
   });
   assert.equal(invalidRegistration.response.status, 400);
   assert.equal(invalidRegistration.result.error, 'Password must be at least 6 characters long.');
+
+  const mismatchedConfirmation = await request('/api/customer/register', {
+    method: 'POST',
+    clientIp: '198.51.100.20',
+    body: { ...registration, confirmPassword: 'Different1' }
+  });
+  assert.equal(mismatchedConfirmation.response.status, 400);
+  assert.equal(mismatchedConfirmation.result.error, 'Passwords do not match.');
+
+  const missingLastName = await request('/api/customer/register', {
+    method: 'POST',
+    clientIp: '198.51.100.21',
+    body: { ...registration, lastName: ' ' }
+  });
+  assert.equal(missingLastName.response.status, 400);
+  assert.equal(missingLastName.result.error, 'Enter a valid first and last name.');
 
   const overlongPassword = await request('/api/customer/register', {
     method: 'POST',
@@ -484,7 +542,7 @@ test('OTP-free customer registration, secure sessions, authenticated customer or
 
   const duplicate = await request('/api/customer/register', {
     method: 'POST',
-    body: { ...registration, password: 'Different1' }
+    body: { ...registration, password: 'Different1', confirmPassword: 'Different1' }
   });
   assert.equal(duplicate.response.status, 200);
   assert.equal(duplicate.result.created, false);
@@ -532,6 +590,9 @@ test('OTP-free customer registration, secure sessions, authenticated customer or
     mobileNumber: '9876543210'
   });
   assert.doesNotMatch(JSON.stringify(profile.result), /password|hash|token|secret/i);
+  const restoredProfile = await request('/api/customer/me', { cookie: customerCookie });
+  assert.equal(restoredProfile.response.status, 200);
+  assert.equal(restoredProfile.result.customer.fullName, 'Avery Morgan');
 
   const invalidFilter = await request('/api/customer/orders?filter=other', { cookie: customerCookie });
   assert.equal(invalidFilter.response.status, 400);
@@ -577,6 +638,36 @@ test('OTP-free customer registration, secure sessions, authenticated customer or
   assert.equal(ownOrders.result.orders.length, 1);
   assert.equal(ownOrders.result.orders[0].order_code, customerOrder.result.orderCode);
   assert.equal(ownOrders.result.orders[0].items[0].quantity, 1);
+  assert.equal(ownOrders.result.orders[0].payment_status, 'Pending');
+  assert.deepEqual(ownOrders.result.stats, {
+    totalOrders: 1,
+    pendingOrders: 1,
+    approvedOrders: 0,
+    deliveredOrders: 0
+  });
+
+  const secondCustomerOrder = await request('/api/place-order', {
+    method: 'POST',
+    body: { ...orderPayload, address: '2 Another Test Road' },
+    cookie: customerCookie
+  });
+  assert.equal(secondCustomerOrder.response.status, 201);
+  assert.equal(state.orders.length, 2);
+  assert.equal(state.orders[1].customer_id, firstAccount.id);
+  assert.notEqual(state.orders[0].order_code, state.orders[1].order_code);
+  state.orders[0].approval_status = 'Approved & Dispatched';
+  state.orders[0].status = 'Shipped';
+  state.orders[1].approval_status = 'Approved & Dispatched';
+  state.orders[1].status = 'Delivered';
+  const updatedDashboard = await request('/api/customer/orders', { cookie: customerCookie });
+  assert.deepEqual(updatedDashboard.result.stats, {
+    totalOrders: 2,
+    pendingOrders: 0,
+    approvedOrders: 2,
+    deliveredOrders: 1
+  });
+  assert.equal(updatedDashboard.result.orders.length, 2);
+  assert.equal(updatedDashboard.result.orders.find((order) => order.status === 'Delivered').payment_status, 'Pending');
 
   const secondRegistration = {
     fullName: 'Another Customer',
@@ -603,6 +694,12 @@ test('OTP-free customer registration, secure sessions, authenticated customer or
   );
   assert.equal(otherCustomersOrders.response.status, 200);
   assert.equal(otherCustomersOrders.result.orders.length, 0);
+  assert.deepEqual(otherCustomersOrders.result.stats, {
+    totalOrders: 0,
+    pendingOrders: 0,
+    approvedOrders: 0,
+    deliveredOrders: 0
+  });
 
   const logout = await request('/api/customer/logout', {
     method: 'POST',
@@ -618,7 +715,17 @@ test('OTP-free customer registration, secure sessions, authenticated customer or
     cookie: customerCookie
   });
   assert.equal(revokedCustomerOrder.response.status, 401);
-  assert.equal(state.orders.length, 1);
+  assert.equal(state.orders.length, 2);
+
+  const loginAgain = await request('/api/customer/login', {
+    method: 'POST',
+    body: { email: registration.email, password: registration.password }
+  });
+  assert.equal(loginAgain.response.status, 200);
+  const loginAgainCookie = sessionCookie(loginAgain.response);
+  const loggedInAgainProfile = await request('/api/customer/me', { cookie: loginAgainCookie });
+  assert.equal(loggedInAgainProfile.response.status, 200);
+  assert.equal(loggedInAgainProfile.result.customer.fullName, 'Avery Morgan');
 
   now += 8 * 60 * 60 * 1000;
   const expiredLogin = await request('/api/customer/login', {
@@ -633,6 +740,7 @@ test('OTP-free customer registration, secure sessions, authenticated customer or
 });
 
 test('customer password reset hides account existence and enforces one-time OTP and reset authorization', async () => {
+  activeClientIp = '198.51.100.11';
   const resetLogin = await request('/api/customer/login', {
     method: 'POST',
     body: { email: 'customer@example.test', password: '  A1bcde  ' }
@@ -696,8 +804,10 @@ test('customer password reset hides account existence and enforces one-time OTP 
   });
   assert.equal(verified.response.status, 200);
   assert.equal(verified.result.verified, true);
-  assert.match(verified.result.resetToken, /^[A-Za-z0-9_-]{43}$/);
-  const resetToken = verified.result.resetToken;
+  assert.deepEqual(verified.result, { verified: true });
+  const resetCookie = resetAuthorizationCookie(verified.response);
+  const resetToken = decodeURIComponent(resetCookie.split('=')[1]);
+  assert.match(resetToken, /^[A-Za-z0-9_-]{43}$/);
   assert.deepEqual(
     state.passwordResets.get(1).reset_token_hash,
     crypto.createHash('sha256').update(resetToken, 'utf8').digest()
@@ -711,7 +821,8 @@ test('customer password reset hides account existence and enforces one-time OTP 
 
   const shortPassword = await request('/api/customer/password-reset/complete', {
     method: 'POST',
-    body: { resetToken, password: 'short', confirmPassword: 'short' }
+    body: { password: 'short', confirmPassword: 'short' },
+    cookie: resetCookie
   });
   assert.equal(shortPassword.response.status, 400);
   assert.match(shortPassword.result.error, /at least 6 characters/i);
@@ -719,8 +830,8 @@ test('customer password reset hides account existence and enforces one-time OTP 
   const newPassword = 'NewStrong1!';
   const completedReset = await request('/api/customer/password-reset/complete', {
     method: 'POST',
-    body: { resetToken, password: newPassword, confirmPassword: newPassword },
-    cookie: oldSessionCookie
+    body: { password: newPassword, confirmPassword: newPassword },
+    cookie: `${oldSessionCookie}; ${resetCookie}`
   });
   assert.equal(completedReset.response.status, 200);
   assert.match(completedReset.response.headers.get('set-cookie'), /apextyre_customer=.*Expires=/i);
@@ -734,7 +845,8 @@ test('customer password reset hides account existence and enforces one-time OTP 
 
   const reusedResetToken = await request('/api/customer/password-reset/complete', {
     method: 'POST',
-    body: { resetToken, password: newPassword, confirmPassword: newPassword }
+    body: { password: newPassword, confirmPassword: newPassword },
+    cookie: resetCookie
   });
   assert.equal(reusedResetToken.response.status, 400);
 
@@ -752,7 +864,7 @@ test('customer password reset hides account existence and enforces one-time OTP 
     cookie: sessionCookie(newPasswordLogin.response)
   });
   assert.equal(ordersAfterReset.response.status, 200);
-  assert.equal(ordersAfterReset.result.orders.length, 1);
+  assert.equal(ordersAfterReset.result.orders.length, 2);
 
   state.passwordResets.get(1).resend_available_at = new Date(Date.now() - 1);
   const expiredCodeRequest = await request('/api/customer/password-reset/request', {
@@ -800,12 +912,136 @@ test('customer password reset hides account existence and enforces one-time OTP 
   assert.match(markup, /data-view-panel="customer-reset-password"/);
   assert.match(markup, /Forgot Password\?/);
   assert.match(markup, /autocomplete="one-time-code"/);
-  assert.match(passwordResetFrontend, /let passwordResetToken = ''/);
-  assert.doesNotMatch(passwordResetFrontend, /localStorage\.(?:setItem|getItem)\([^)]*passwordResetToken/);
+  assert.doesNotMatch(passwordResetFrontend, /passwordResetToken/);
   const resetBackend = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   const resetRoutes = resetBackend.slice(
-    resetBackend.indexOf("app.post(\n  '/api/customer/password-reset/request'"),
+    resetBackend.indexOf("'/api/customer/password-reset/request'"),
     resetBackend.indexOf("app.post('/api/customer/logout'")
   );
   assert.doesNotMatch(resetRoutes, /console\.(?:log|info|warn|error)\([^)]*(?:email|password|otp|token|hash)/i);
+  assert.match(resetRoutes, /setCustomerPasswordResetCookie\(res, resetToken\)/);
+  assert.match(resetRoutes, /req\.cookies\?\.\[CUSTOMER_PASSWORD_RESET_COOKIE\]/);
+});
+
+test('pre-existing legacy-format customer accounts can log in and resist split-name duplicates', async () => {
+  const legacyRegistration = {
+    fullName: 'Legacy Customer',
+    email: 'legacy-customer@example.test',
+    mobileNumber: '9876543212',
+    password: 'LegacyPassword123'
+  };
+  const registered = await request('/api/customer/register', {
+    method: 'POST',
+    clientIp: '198.51.100.30',
+    body: legacyRegistration
+  });
+  assert.equal(registered.response.status, 201);
+  assert.equal(registered.result.created, true);
+
+  const existingAccount = state.accounts.get(legacyRegistration.email);
+  assert.equal(existingAccount.full_name, legacyRegistration.fullName);
+  const existingPasswordHash = existingAccount.password_hash;
+  const accountCountBeforeDuplicate = state.accounts.size;
+
+  const login = await request('/api/customer/login', {
+    method: 'POST',
+    clientIp: '198.51.100.31',
+    body: {
+      email: legacyRegistration.email,
+      password: legacyRegistration.password
+    }
+  });
+  assert.equal(login.response.status, 200);
+  const profile = await request('/api/customer/me', {
+    cookie: sessionCookie(login.response)
+  });
+  assert.equal(profile.response.status, 200);
+  assert.equal(profile.result.customer.fullName, legacyRegistration.fullName);
+
+  const splitNameDuplicate = await request('/api/customer/register', {
+    method: 'POST',
+    clientIp: '198.51.100.32',
+    body: {
+      firstName: 'Changed',
+      lastName: 'Name',
+      email: legacyRegistration.email,
+      mobileNumber: '9876543213',
+      password: 'ReplacementPassword123',
+      confirmPassword: 'ReplacementPassword123'
+    }
+  });
+  assert.equal(splitNameDuplicate.response.status, 200);
+  assert.equal(splitNameDuplicate.result.created, false);
+  assert.equal(state.accounts.size, accountCountBeforeDuplicate);
+  const accountAfterDuplicate = state.accounts.get(legacyRegistration.email);
+  assert.equal(accountAfterDuplicate.id, existingAccount.id);
+  assert.equal(accountAfterDuplicate.full_name, legacyRegistration.fullName);
+  assert.equal(accountAfterDuplicate.password_hash, existingPasswordHash);
+
+  const originalPasswordStillWorks = await request('/api/customer/login', {
+    method: 'POST',
+    clientIp: '198.51.100.33',
+    body: {
+      email: legacyRegistration.email,
+      password: legacyRegistration.password
+    }
+  });
+  assert.equal(originalPasswordStillWorks.response.status, 200);
+  const replacementPasswordRejected = await request('/api/customer/login', {
+    method: 'POST',
+    clientIp: '198.51.100.34',
+    body: {
+      email: legacyRegistration.email,
+      password: 'ReplacementPassword123'
+    }
+  });
+  assert.equal(replacementPasswordRejected.response.status, 401);
+});
+
+test('an unexpired, unrevoked session from the existing session contract remains valid', async () => {
+  const registration = {
+    fullName: 'Session Compatibility Customer',
+    email: 'session-compatibility@example.test',
+    mobileNumber: '9876543214',
+    password: 'SessionPassword123'
+  };
+  const registered = await request('/api/customer/register', {
+    method: 'POST',
+    clientIp: '198.51.100.35',
+    body: registration
+  });
+  assert.equal(registered.response.status, 201);
+  const account = state.accounts.get(registration.email);
+
+  const existingSessionToken = crypto.randomBytes(32).toString('base64url');
+  const existingSessionHash = crypto.createHash('sha256')
+    .update(existingSessionToken, 'utf8')
+    .digest('hex');
+  const existingSession = {
+    id: state.nextSessionId++,
+    customer_id: account.id,
+    expires_at: now + 60 * 60 * 1000,
+    revoked_at: null
+  };
+  state.sessions.set(existingSessionHash, existingSession);
+
+  const restoredProfile = await request('/api/customer/me', {
+    cookie: `apextyre_customer=${existingSessionToken}`
+  });
+  assert.equal(restoredProfile.response.status, 200);
+  assert.equal(restoredProfile.result.customer.id, account.id);
+  assert.equal(restoredProfile.result.customer.fullName, registration.fullName);
+
+  existingSession.revoked_at = now;
+  const revokedProfile = await request('/api/customer/me', {
+    cookie: `apextyre_customer=${existingSessionToken}`
+  });
+  assert.equal(revokedProfile.response.status, 401);
+
+  existingSession.revoked_at = null;
+  existingSession.expires_at = now - 1;
+  const expiredProfile = await request('/api/customer/me', {
+    cookie: `apextyre_customer=${existingSessionToken}`
+  });
+  assert.equal(expiredProfile.response.status, 401);
 });

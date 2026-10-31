@@ -112,7 +112,6 @@ let checkoutSource = 'single';
 let currentCustomer = null;
 let pendingCheckout = null;
 let passwordResetEmail = '';
-let passwordResetToken = '';
 
 function applyTheme(theme) {
   const activeTheme = theme === 'light' ? 'light' : 'dark';
@@ -376,12 +375,13 @@ function customerJsonRequest(method, payload) {
 
 function showCustomerProfile(customer) {
   currentCustomer = customer;
+  document.querySelector('#customer-welcome-name').textContent = customer.fullName || 'Customer';
   document.querySelector('#customer-profile-name').textContent = customer.fullName || '';
   document.querySelector('#customer-profile-email').textContent = customer.email || '';
   document.querySelector('#customer-profile-mobile').textContent = customer.mobileNumber || '';
   customerAccountNav.dataset.viewLink = 'customer-account';
   customerAccountNav.querySelector('strong').textContent = 'My Account';
-  customerAccountNav.querySelector('small').textContent = customer.fullName || 'Customer';
+  customerAccountNav.querySelector('small').textContent = `Welcome, ${customer.fullName || 'Customer'}`;
 }
 
 async function loadCustomerOrders() {
@@ -393,9 +393,23 @@ async function loadCustomerOrders() {
   try {
     const result = await customerApi(`/api/customer/orders?filter=${encodeURIComponent(filter)}`);
     const orders = Array.isArray(result.orders) ? result.orders : [];
+    const stats = result.stats;
+    const statValues = {
+      total: stats?.totalOrders,
+      pending: stats?.pendingOrders,
+      approved: stats?.approvedOrders,
+      delivered: stats?.deliveredOrders
+    };
+    for (const [key, value] of Object.entries(statValues)) {
+      const element = document.querySelector(`#customer-stat-${key}`);
+      element.textContent = Number.isInteger(value) && value >= 0 ? String(value) : '—';
+    }
     ordersStatus.textContent = '';
     if (!orders.length) {
-      ordersList.innerHTML = '<p class="customer-empty">No orders match this filter.</p>';
+      const emptyMessage = filter === 'all'
+        ? 'Your next great drive starts here. Your orders will appear here after checkout.'
+        : 'No orders match this filter.';
+      ordersList.innerHTML = `<div class="customer-empty"><span aria-hidden="true">◈</span><p>${emptyMessage}</p><button class="customer-dashboard-action" type="button" data-dashboard-action="shop">Continue shopping <span aria-hidden="true">→</span></button></div>`;
       return;
     }
 
@@ -410,18 +424,24 @@ async function loadCustomerOrders() {
         : orderDate.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
       return `<article class="customer-order-card">
         <div class="customer-order-top">
-          <strong>Order ${safe(order.order_code || order.id)}</strong>
-          <time>${safe(dateText)}</time>
+          <div><span class="customer-order-label">ORDER</span><strong>${safe(order.order_code || order.id)}</strong><time>${safe(dateText)}</time></div>
+          <strong class="customer-order-total">${exactMoney.format(Number(order.total_amount) || 0)}</strong>
         </div>
-        <div class="customer-order-items">${itemMarkup || '<div>Order details unavailable.</div>'}</div>
-        <div class="customer-order-meta">
-          <span>Approval: <strong>${safe(order.approval_status)}</strong></span>
-          <span>Order status: <strong>${safe(order.status)}</strong></span>
-          <span>Subtotal: <strong>${exactMoney.format(Number(order.subtotal_amount) || 0)}</strong></span>
-          <span>GST: <strong>${exactMoney.format(Number(order.gst_amount) || 0)}</strong></span>
-          <span>Delivery: <strong>${exactMoney.format(Number(order.delivery_amount) || 0)}</strong></span>
-          <span>Total: <strong>${exactMoney.format(Number(order.total_amount) || 0)}</strong></span>
+        <div class="customer-order-badges">
+          <span>Order <strong>${safe(order.status)}</strong></span>
+          <span>Approval <strong>${safe(order.approval_status)}</strong></span>
+          <span>Payment <strong>${safe(order.payment_status)}</strong></span>
         </div>
+        <details class="customer-order-details">
+          <summary>View details</summary>
+          <div class="customer-order-items">${itemMarkup || '<div>Order details unavailable.</div>'}</div>
+          <div class="customer-order-meta">
+            <span>Subtotal <strong>${exactMoney.format(Number(order.subtotal_amount) || 0)}</strong></span>
+            <span>GST <strong>${exactMoney.format(Number(order.gst_amount) || 0)}</strong></span>
+            <span>Delivery <strong>${exactMoney.format(Number(order.delivery_amount) || 0)}</strong></span>
+            <span>Total <strong>${exactMoney.format(Number(order.total_amount) || 0)}</strong></span>
+          </div>
+        </details>
       </article>`;
     }).join('');
   } catch (error) {
@@ -460,12 +480,9 @@ function switchTab(viewName) {
   const view = allowedViews.includes(viewName) ? viewName : 'home';
   if (!['customer-forgot-password', 'customer-reset-otp', 'customer-reset-password'].includes(view)) {
     passwordResetEmail = '';
-    passwordResetToken = '';
     customerPasswordResetRequestForm.reset();
     customerPasswordResetOtpForm.reset();
     customerPasswordResetCompleteForm.reset();
-  } else if (view !== 'customer-reset-password') {
-    passwordResetToken = '';
   }
   document.querySelectorAll('[data-view-panel]').forEach((panel) => {
     panel.hidden = panel.dataset.viewPanel !== view;
@@ -982,9 +999,17 @@ customerRegisterForm.addEventListener('submit', async (event) => {
   const form = new FormData(customerRegisterForm);
   const email = String(form.get('email') || '').trim().toLowerCase();
   const password = String(form.get('password') || '');
+  const confirmPassword = String(form.get('confirmPassword') || '');
   if (Array.from(password).length < 6) {
     errorElement.textContent = 'Password must be at least 6 characters long.';
     customerRegisterForm.elements.password.focus();
+    submitButton.disabled = false;
+    submitButton.textContent = originalLabel;
+    return;
+  }
+  if (password !== confirmPassword) {
+    errorElement.textContent = 'Passwords do not match.';
+    customerRegisterForm.elements.confirmPassword.focus();
     submitButton.disabled = false;
     submitButton.textContent = originalLabel;
     return;
@@ -1077,7 +1102,6 @@ customerPasswordResetOtpForm.addEventListener('submit', async (event) => {
       '/api/customer/password-reset/verify',
       customerJsonRequest('POST', { email: passwordResetEmail, otp })
     );
-    passwordResetToken = result.resetToken;
     customerPasswordResetOtpForm.reset();
     switchTab('customer-reset-password');
   } catch (error) {
@@ -1122,7 +1146,6 @@ customerPasswordResetCompleteForm.addEventListener('submit', async (event) => {
     const result = await customerApi(
       '/api/customer/password-reset/complete',
       customerJsonRequest('POST', {
-        resetToken: passwordResetToken,
         password: String(form.get('password') || ''),
         confirmPassword: String(form.get('confirmPassword') || '')
       })
@@ -1130,7 +1153,6 @@ customerPasswordResetCompleteForm.addEventListener('submit', async (event) => {
     customerPasswordResetCompleteForm.reset();
     customerPasswordResetRequestForm.reset();
     customerLoginForm.elements.email.value = passwordResetEmail;
-    passwordResetToken = '';
     passwordResetEmail = '';
     currentCustomer = null;
     customerAccountNav.dataset.viewLink = 'customer-login';
@@ -1165,6 +1187,24 @@ document.querySelector('#customer-logout').addEventListener('click', async (even
     button.disabled = false;
     button.textContent = originalLabel;
   }
+});
+
+function handleDashboardAction(action) {
+  if (action === 'shop') {
+    switchTab('home');
+    window.setTimeout(() => document.querySelector('#tyres').scrollIntoView({ behavior: 'smooth' }), 50);
+  } else if (action === 'orders') {
+    document.querySelector('#customer-orders').scrollIntoView({ behavior: 'smooth' });
+  } else if (action === 'profile') {
+    document.querySelector('#customer-profile').scrollIntoView({ behavior: 'smooth' });
+  } else if (action === 'signout') {
+    document.querySelector('#customer-logout').click();
+  }
+}
+
+document.querySelector('.customer-dashboard').addEventListener('click', (event) => {
+  const actionButton = event.target.closest('[data-dashboard-action]');
+  if (actionButton) handleDashboardAction(actionButton.dataset.dashboardAction);
 });
 
 document.querySelector('#customer-order-filter').addEventListener('change', () => {

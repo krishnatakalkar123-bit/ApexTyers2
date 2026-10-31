@@ -221,10 +221,14 @@
         <h1>Create your account</h1>
         <p class="customer-intro">Create an account to view your profile and order history.</p>
         <form id="customer-register-form" class="customer-form">
-          <label>Full name<input name="fullName" autocomplete="name" minlength="2" maxlength="100" required></label>
+          <div class="customer-name-fields">
+            <label>First name<input name="firstName" autocomplete="given-name" minlength="1" maxlength="50" required></label>
+            <label>Last name<input name="lastName" autocomplete="family-name" minlength="1" maxlength="50" required></label>
+          </div>
           <label>Email address<input name="email" type="email" autocomplete="email" maxlength="254" required></label>
-          <label>Mobile number<input name="mobileNumber" type="tel" autocomplete="tel" minlength="8" maxlength="20" required></label>
+          <label>Mobile number<input name="mobileNumber" type="tel" autocomplete="tel" pattern="(?=.*[0-9])[0-9+() -]{8,20}" minlength="8" maxlength="20" required></label>
           <label>Password<input name="password" type="password" autocomplete="new-password" maxlength="72" required><small>Use at least 6 characters.</small></label>
+          <label>Confirm password<input name="confirmPassword" type="password" autocomplete="new-password" maxlength="72" required></label>
           <p class="form-error" id="customer-register-error" role="alert"></p>
           <button class="hero-primary" type="submit">Create account</button>
         </form>
@@ -293,32 +297,61 @@
     </section>
 
     <section class="view-panel market-container customer-view" data-view-panel="customer-account" hidden>
-      <div class="customer-account-heading">
-        <div><p class="market-kicker">MY APEXTYRE ACCOUNT</p><h1>My account</h1></div>
-        <button class="customer-secondary" id="customer-logout" type="button">Sign out</button>
-      </div>
-      <section class="customer-profile-card" aria-labelledby="customer-profile-title">
-        <h2 id="customer-profile-title">Profile details</h2>
-        <dl>
-          <div><dt>Name</dt><dd id="customer-profile-name"></dd></div>
-          <div><dt>Email</dt><dd id="customer-profile-email"></dd></div>
-          <div><dt>Mobile</dt><dd id="customer-profile-mobile"></dd></div>
-        </dl>
-      </section>
-      <section class="customer-orders-section" aria-labelledby="customer-orders-title">
-        <div class="customer-orders-heading"><div><p class="market-kicker">ORDER HISTORY</p><h2 id="customer-orders-title">My orders</h2></div>
-          <label>Show orders
-            <select id="customer-order-filter">
-              <option value="all">All Orders</option>
-              <option value="pending">Pending Approval</option>
-              <option value="approved">Approved</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-          </label>
+      <div class="customer-dashboard">
+        <header class="customer-dashboard-hero">
+          <div class="customer-dashboard-brand"><span class="customer-dashboard-mark" aria-hidden="true">A</span><span>APEXTYRE <small>CUSTOMER GARAGE</small></span></div>
+          <div class="customer-dashboard-welcome">
+            <p class="customer-dashboard-eyebrow">YOUR ACCOUNT · YOUR JOURNEYS</p>
+            <h1>Welcome, <span id="customer-welcome-name"></span>!</h1>
+            <p>Everything you need for the road ahead, in one place.</p>
+          </div>
+          <button class="customer-dashboard-signout" id="customer-logout" type="button">Sign out <span aria-hidden="true">↗</span></button>
+        </header>
+
+        <div class="customer-dashboard-content">
+          <section class="customer-stats-grid" aria-label="Order statistics">
+            <article class="customer-stat-card"><span>Total orders</span><strong id="customer-stat-total">—</strong><small>Orders placed with ApexTyre</small></article>
+            <article class="customer-stat-card"><span>Pending</span><strong id="customer-stat-pending">—</strong><small>Awaiting approval</small></article>
+            <article class="customer-stat-card"><span>Approved</span><strong id="customer-stat-approved">—</strong><small>Approved &amp; dispatched</small></article>
+            <article class="customer-stat-card"><span>Delivered</span><strong id="customer-stat-delivered">—</strong><small>Successfully delivered</small></article>
+          </section>
+
+          <div class="customer-dashboard-grid">
+            <section class="customer-profile-card" id="customer-profile" aria-labelledby="customer-profile-title">
+              <div class="customer-section-heading"><div><p class="customer-dashboard-eyebrow">YOUR DETAILS</p><h2 id="customer-profile-title">My profile</h2></div><span class="customer-profile-icon" aria-hidden="true">◉</span></div>
+              <dl>
+                <div><dt>Full name</dt><dd id="customer-profile-name"></dd></div>
+                <div><dt>Email address</dt><dd id="customer-profile-email"></dd></div>
+                <div><dt>Mobile number</dt><dd id="customer-profile-mobile"></dd></div>
+              </dl>
+            </section>
+
+            <nav class="customer-quick-actions" aria-label="Customer quick actions">
+              <p class="customer-dashboard-eyebrow">QUICK ACTIONS</p>
+              <button type="button" data-dashboard-action="shop"><span>Continue shopping</span><span aria-hidden="true">↗</span></button>
+              <button type="button" data-dashboard-action="orders"><span>View my orders</span><span aria-hidden="true">↓</span></button>
+              <button type="button" data-dashboard-action="profile"><span>My profile</span><span aria-hidden="true">→</span></button>
+              <button type="button" data-dashboard-action="signout"><span>Sign out</span><span aria-hidden="true">↗</span></button>
+            </nav>
+          </div>
+
+          <section class="customer-orders-section" id="customer-orders" aria-labelledby="customer-orders-title">
+            <div class="customer-orders-heading">
+              <div><p class="customer-dashboard-eyebrow">BUILT FOR EVERY JOURNEY</p><h2 id="customer-orders-title">My orders</h2><p>Track your requests and revisit your order details.</p></div>
+              <label>Order view
+                <select id="customer-order-filter">
+                  <option value="all">All orders</option>
+                  <option value="pending">Pending approval</option>
+                  <option value="approved">Approved</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </label>
+            </div>
+            <p class="customer-status" id="customer-orders-status" aria-live="polite"></p>
+            <div class="customer-orders-list" id="customer-orders-list" aria-live="polite"></div>
+          </section>
         </div>
-        <p class="customer-status" id="customer-orders-status" aria-live="polite"></p>
-        <div class="customer-orders-list" id="customer-orders-list" aria-live="polite"></div>
-      </section>
+      </div>
     </section>
   </main>
 

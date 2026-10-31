@@ -12,6 +12,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const SESSION_COOKIE = 'apextyre_owner';
 const CUSTOMER_SESSION_COOKIE = 'apextyre_customer';
+const CUSTOMER_PASSWORD_RESET_COOKIE = 'apextyre_password_reset';
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || '';
 const CUSTOMER_PASSWORD_RESET_SECRET = process.env.CUSTOMER_PASSWORD_RESET_SECRET || '';
 const SESSION_LIFETIME = 8 * 60 * 60 * 1000;
@@ -125,13 +126,29 @@ const CUSTOMER_SESSION_COOKIE_OPTIONS = Object.freeze({
   maxAge: CUSTOMER_SESSION_LIFETIME,
   path: '/api'
 });
+const CUSTOMER_PASSWORD_RESET_COOKIE_OPTIONS = Object.freeze({
+  httpOnly: true,
+  secure: CUSTOMER_SESSION_COOKIE_CROSS_SITE,
+  sameSite: CUSTOMER_SESSION_COOKIE_CROSS_SITE ? 'none' : 'lax',
+  maxAge: CUSTOMER_PASSWORD_RESET_TOKEN_LIFETIME,
+  path: '/api/customer/password-reset'
+});
 function setCustomerSessionCookie(res, token) {
   res.cookie(CUSTOMER_SESSION_COOKIE, token, CUSTOMER_SESSION_COOKIE_OPTIONS);
+}
+
+function setCustomerPasswordResetCookie(res, token) {
+  res.cookie(CUSTOMER_PASSWORD_RESET_COOKIE, token, CUSTOMER_PASSWORD_RESET_COOKIE_OPTIONS);
 }
 
 function clearCustomerSessionCookie(res) {
   const { maxAge, ...clearOptions } = CUSTOMER_SESSION_COOKIE_OPTIONS;
   res.clearCookie(CUSTOMER_SESSION_COOKIE, clearOptions);
+}
+
+function clearCustomerPasswordResetCookie(res) {
+  const { maxAge, ...clearOptions } = CUSTOMER_PASSWORD_RESET_COOKIE_OPTIONS;
+  res.clearCookie(CUSTOMER_PASSWORD_RESET_COOKIE, clearOptions);
 }
 
 async function sendOrderApprovalEmail(order) {
@@ -588,15 +605,29 @@ app.post(
       return sendJsonError(res, 400, 'Enter valid registration details.');
     }
 
-    const fullName = typeof body.fullName === 'string'
+    const firstName = typeof body.firstName === 'string'
+      ? body.firstName.trim().replace(/\s+/g, ' ')
+      : '';
+    const lastName = typeof body.lastName === 'string'
+      ? body.lastName.trim().replace(/\s+/g, ' ')
+      : '';
+    const hasSplitName = Object.hasOwn(body, 'firstName') || Object.hasOwn(body, 'lastName');
+    const legacyFullName = typeof body.fullName === 'string'
       ? body.fullName.trim().replace(/\s+/g, ' ')
       : '';
+    const fullName = hasSplitName ? `${firstName} ${lastName}`.trim() : legacyFullName;
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const mobileNumber = typeof body.mobileNumber === 'string' ? body.mobileNumber.trim() : '';
     const password = typeof body.password === 'string' ? body.password : '';
+    const confirmPassword = typeof body.confirmPassword === 'string' ? body.confirmPassword : '';
     if (Array.from(password).length < 6) {
       logCustomerAuthFailure('registration', 'password_policy');
       return sendJsonError(res, 400, 'Password must be at least 6 characters long.');
+    }
+    if (hasSplitName && (firstName.length < 1 || firstName.length > 50 ||
+        lastName.length < 1 || lastName.length > 50)) {
+      logCustomerAuthFailure('registration', 'invalid_name');
+      return sendJsonError(res, 400, 'Enter a valid first and last name.');
     }
     if (fullName.length < 2 || fullName.length > 100 ||
         !email || email.length > 254 || !isValidEmail(email) ||
@@ -604,6 +635,10 @@ app.post(
         Buffer.byteLength(password, 'utf8') > 72) {
       logCustomerAuthFailure('registration', 'invalid_details');
       return sendJsonError(res, 400, 'Check your name, email, mobile number, and password requirements.');
+    }
+    if (hasSplitName && password !== confirmPassword) {
+      logCustomerAuthFailure('registration', 'password_confirmation');
+      return sendJsonError(res, 400, 'Passwords do not match.');
     }
 
     let stage = 'password_hash';
@@ -893,7 +928,8 @@ app.post(
     if (!verified) {
       return sendJsonError(res, 400, 'The code is invalid, expired, or no longer usable.');
     }
-    return res.json({ verified: true, resetToken });
+    setCustomerPasswordResetCookie(res, resetToken);
+    return res.json({ verified: true });
   }
 );
 
@@ -903,7 +939,8 @@ app.post(
   customerRateLimiters.passwordResetComplete,
   async (req, res) => {
     res.set('Cache-Control', 'no-store');
-    const { resetToken, password, confirmPassword } = req.body || {};
+    const { password, confirmPassword } = req.body || {};
+    const resetToken = req.cookies?.[CUSTOMER_PASSWORD_RESET_COOKIE];
     if (typeof resetToken !== 'string' ||
         typeof password !== 'string' ||
         typeof confirmPassword !== 'string' ||
@@ -987,9 +1024,11 @@ app.post(
       });
 
       if (!reset) {
+        clearCustomerPasswordResetCookie(res);
         return sendJsonError(res, 400, 'The reset authorization is invalid, expired, or already used.');
       }
       clearCustomerSessionCookie(res);
+      clearCustomerPasswordResetCookie(res);
       return res.json({ message: 'Your password has been reset. Sign in with your new password.' });
     } catch {
       logCustomerPasswordResetFailure('complete', 'database');
@@ -1043,11 +1082,12 @@ app.get('/api/customer/orders', requireCustomerSession, async (req, res, next) =
   }
 
   try {
-    const orders = await all(
-      `SELECT order_row.id, order_row.order_code, order_row.created_at,
+    const [orders, summary] = await Promise.all([
+      all(
+        `SELECT order_row.id, order_row.order_code, order_row.created_at,
               order_row.subtotal_amount, order_row.gst_amount,
               order_row.delivery_amount, order_row.total_amount,
-              order_row.approval_status, order_row.status,
+              order_row.approval_status, order_row.status, order_row.payment_status,
               COALESCE(
                 json_agg(json_build_object(
                   'brand', item.brand,
@@ -1071,10 +1111,28 @@ app.get('/api/customer/orders', requireCustomerSession, async (req, res, next) =
          )
        GROUP BY order_row.id
        ORDER BY order_row.created_at DESC, order_row.id DESC`,
-      [req.customer.id, filters[filter]]
-    );
+        [req.customer.id, filters[filter]]
+      ),
+      get(
+        `SELECT COUNT(*)::INTEGER AS total_orders,
+                COUNT(*) FILTER (WHERE approval_status = 'Pending Approval')::INTEGER AS pending_orders,
+                COUNT(*) FILTER (WHERE approval_status = 'Approved & Dispatched')::INTEGER AS approved_orders,
+                COUNT(*) FILTER (WHERE status = 'Delivered')::INTEGER AS delivered_orders
+         FROM public.orders
+         WHERE customer_id = $1`,
+        [req.customer.id]
+      )
+    ]);
     res.set('Cache-Control', 'no-store');
-    return res.json({ orders });
+    return res.json({
+      orders,
+      stats: {
+        totalOrders: summary.total_orders,
+        pendingOrders: summary.pending_orders,
+        approvedOrders: summary.approved_orders,
+        deliveredOrders: summary.delivered_orders
+      }
+    });
   } catch (error) {
     return next(error);
   }
