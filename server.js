@@ -13,8 +13,12 @@ const PORT = process.env.PORT || 3000;
 const SESSION_COOKIE = 'apextyre_owner';
 const CUSTOMER_SESSION_COOKIE = 'apextyre_customer';
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || '';
+const CUSTOMER_PASSWORD_RESET_SECRET = process.env.CUSTOMER_PASSWORD_RESET_SECRET || '';
 const SESSION_LIFETIME = 8 * 60 * 60 * 1000;
 const CUSTOMER_SESSION_LIFETIME = 8 * 60 * 60 * 1000;
+const CUSTOMER_PASSWORD_RESET_OTP_LIFETIME = 10 * 60 * 1000;
+const CUSTOMER_PASSWORD_RESET_TOKEN_LIFETIME = 10 * 60 * 1000;
+const CUSTOMER_PASSWORD_RESET_RESPONSE_MIN_DELAY = 500;
 const ORDER_STATUSES = ['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
 const GST_RATE = 0.18;
 const DELIVERY_CHARGE = 99;
@@ -77,6 +81,39 @@ function hashCustomerSessionToken(token) {
     throw new Error('Customer session token is invalid.');
   }
   return crypto.createHash('sha256').update(token, 'utf8').digest();
+}
+
+function hashCustomerPasswordResetOtp(customerId, otp) {
+  if (!isCustomerPasswordResetSecretConfigured()) {
+    throw new Error('Customer password reset secret is not configured.');
+  }
+  return crypto.createHmac('sha256', CUSTOMER_PASSWORD_RESET_SECRET)
+    .update(`apextyre-password-reset:${customerId}:${otp}`, 'utf8')
+    .digest();
+}
+
+function isCustomerPasswordResetSecretConfigured() {
+  return Buffer.byteLength(CUSTOMER_PASSWORD_RESET_SECRET, 'utf8') >= 32 &&
+    !/^replace-with-/i.test(CUSTOMER_PASSWORD_RESET_SECRET);
+}
+
+function hashCustomerPasswordResetToken(token) {
+  if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token)) {
+    throw new Error('Customer password reset token is invalid.');
+  }
+  return crypto.createHash('sha256').update(token, 'utf8').digest();
+}
+
+function compareCustomerPasswordResetHashes(expected, supplied) {
+  if (!Buffer.isBuffer(expected) || expected.length !== 32 ||
+      !Buffer.isBuffer(supplied) || supplied.length !== 32) {
+    return false;
+  }
+  return crypto.timingSafeEqual(expected, supplied);
+}
+
+function logCustomerPasswordResetFailure(operation, reason) {
+  console.warn(`[customer-password-reset] ${operation} failed; reason=${reason}`);
 }
 
 const CUSTOMER_SESSION_COOKIE_CROSS_SITE =
@@ -477,7 +514,10 @@ function createCustomerRateLimiter({ maxRequests, windowMs }) {
 
 const customerRateLimiters = Object.freeze({
   register: createCustomerRateLimiter({ maxRequests: 5, windowMs: 15 * 60 * 1000 }),
-  login: createCustomerRateLimiter({ maxRequests: 10, windowMs: 15 * 60 * 1000 })
+  login: createCustomerRateLimiter({ maxRequests: 10, windowMs: 15 * 60 * 1000 }),
+  passwordResetRequest: createCustomerRateLimiter({ maxRequests: 5, windowMs: 15 * 60 * 1000 }),
+  passwordResetVerify: createCustomerRateLimiter({ maxRequests: 10, windowMs: 15 * 60 * 1000 }),
+  passwordResetComplete: createCustomerRateLimiter({ maxRequests: 5, windowMs: 15 * 60 * 1000 })
 });
 
 const loginAttempts = new Map();
@@ -650,6 +690,310 @@ app.post(
     } catch (error) {
       logCustomerAuthFailure('login', stage, error);
       return next(new Error('Customer sign-in failed.'));
+    }
+  }
+);
+
+app.post(
+  '/api/customer/password-reset/request',
+  requireCustomerRequestOrigin,
+  customerRateLimiters.passwordResetRequest,
+  async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const requestStartedAt = Date.now();
+    const genericResponse = async () => {
+      const remainingDelay = CUSTOMER_PASSWORD_RESET_RESPONSE_MIN_DELAY - (Date.now() - requestStartedAt);
+      if (remainingDelay > 0) await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+      return res.status(202).json({
+        message: 'If an account exists for that email, a reset code will be sent shortly.'
+      });
+    };
+    if (!isCustomerPasswordResetSecretConfigured()) {
+      logCustomerPasswordResetFailure('request', 'configuration_unavailable');
+      return sendJsonError(res, 503, 'Password reset is temporarily unavailable.');
+    }
+
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (!email || email.length > 254 || !isValidEmail(email)) return genericResponse();
+
+    let resetRequest;
+    try {
+      resetRequest = await withTransaction(async (client) => {
+        const account = await get(
+          `SELECT id, full_name, email
+           FROM public.customer_accounts
+           WHERE email = $1
+           FOR UPDATE`,
+          [email],
+          client
+        );
+        if (!account) return null;
+
+        const otp = String(crypto.randomInt(100000, 1000000));
+        const otpHash = hashCustomerPasswordResetOtp(account.id, otp);
+        const reset = await get(
+          `INSERT INTO public.customer_password_resets AS current_reset
+             (customer_id, otp_hash, otp_expires_at, attempts, resend_available_at,
+              resend_count, resend_window_started_at)
+           VALUES ($1, $2, CURRENT_TIMESTAMP + ($3::integer * INTERVAL '1 millisecond'),
+                   0, CURRENT_TIMESTAMP + INTERVAL '1 minute', 1, CURRENT_TIMESTAMP)
+           ON CONFLICT (customer_id) DO UPDATE SET
+             otp_hash = EXCLUDED.otp_hash,
+             otp_expires_at = EXCLUDED.otp_expires_at,
+             attempts = 0,
+             resend_available_at = CURRENT_TIMESTAMP + INTERVAL '1 minute',
+             resend_count = CASE
+               WHEN current_reset.resend_window_started_at <= CURRENT_TIMESTAMP - INTERVAL '15 minutes'
+                 THEN 1
+               ELSE current_reset.resend_count + 1
+             END,
+             resend_window_started_at = CASE
+               WHEN current_reset.resend_window_started_at <= CURRENT_TIMESTAMP - INTERVAL '15 minutes'
+                 THEN CURRENT_TIMESTAMP
+               ELSE current_reset.resend_window_started_at
+             END,
+             otp_consumed_at = NULL,
+             reset_token_hash = NULL,
+             reset_token_expires_at = NULL,
+             reset_consumed_at = NULL,
+             updated_at = CURRENT_TIMESTAMP
+           WHERE current_reset.resend_available_at <= CURRENT_TIMESTAMP
+             AND (current_reset.resend_window_started_at <= CURRENT_TIMESTAMP - INTERVAL '15 minutes'
+                  OR current_reset.resend_count < 3)
+           RETURNING customer_id`,
+          [account.id, otpHash, CUSTOMER_PASSWORD_RESET_OTP_LIFETIME],
+          client
+        );
+        return reset
+          ? {
+            customerId: account.id,
+            fullName: account.full_name,
+            email: account.email,
+            otp,
+            otpHash
+          }
+          : null;
+      });
+    } catch {
+      logCustomerPasswordResetFailure('request', 'database');
+      return genericResponse();
+    }
+
+    if (resetRequest) {
+      const escapedName = escapeHtml(resetRequest.fullName);
+      void sendResendEmail({
+        recipient: resetRequest.email,
+        subject: 'Your ApexTyre password reset code',
+        html: `<p>Hello ${escapedName},</p>
+          <p>Your ApexTyre password reset code is <strong>${resetRequest.otp}</strong>.</p>
+          <p>This code expires in 10 minutes. If you did not request a password reset, you can ignore this email.</p>`,
+        text: `Your ApexTyre password reset code is ${resetRequest.otp}. It expires in 10 minutes. If you did not request a password reset, ignore this email.`
+      }).catch(async () => {
+        logCustomerPasswordResetFailure('request', 'email_delivery');
+        try {
+          await run(
+            `UPDATE public.customer_password_resets
+             SET otp_consumed_at = CURRENT_TIMESTAMP,
+                 resend_available_at = CURRENT_TIMESTAMP,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE customer_id = $1 AND otp_hash = $2`,
+            [resetRequest.customerId, resetRequest.otpHash]
+          );
+        } catch {
+          logCustomerPasswordResetFailure('request', 'otp_invalidation');
+        }
+      });
+    }
+
+    return genericResponse();
+  }
+);
+
+app.post(
+  '/api/customer/password-reset/verify',
+  requireCustomerRequestOrigin,
+  customerRateLimiters.passwordResetVerify,
+  async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (!isCustomerPasswordResetSecretConfigured()) {
+      logCustomerPasswordResetFailure('verify', 'configuration_unavailable');
+      return sendJsonError(res, 503, 'Password reset is temporarily unavailable.');
+    }
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    const otp = typeof req.body?.otp === 'string' ? req.body.otp : '';
+    if (!email || email.length > 254 || !isValidEmail(email) || !/^\d{6}$/.test(otp)) {
+      return sendJsonError(res, 400, 'The code is invalid, expired, or no longer usable.');
+    }
+
+    const resetToken = crypto.randomBytes(32).toString('base64url');
+    let verified = false;
+    try {
+      verified = await withTransaction(async (client) => {
+        const account = await get(
+          `SELECT id
+           FROM public.customer_accounts
+           WHERE email = $1
+           FOR UPDATE`,
+          [email],
+          client
+        );
+        if (!account) return false;
+
+        const reset = await get(
+          `SELECT otp_hash, otp_expires_at, attempts, otp_consumed_at
+           FROM public.customer_password_resets
+           WHERE customer_id = $1
+           FOR UPDATE`,
+          [account.id],
+          client
+        );
+        if (!reset || reset.otp_consumed_at ||
+            new Date(reset.otp_expires_at).getTime() <= Date.now() ||
+            reset.attempts >= 5) {
+          return false;
+        }
+
+        const suppliedHash = hashCustomerPasswordResetOtp(account.id, otp);
+        if (!compareCustomerPasswordResetHashes(reset.otp_hash, suppliedHash)) {
+          await run(
+            `UPDATE public.customer_password_resets
+             SET attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP
+             WHERE customer_id = $1 AND attempts < 5`,
+            [account.id],
+            client
+          );
+          return false;
+        }
+
+        const consumed = await run(
+          `UPDATE public.customer_password_resets
+           SET otp_consumed_at = CURRENT_TIMESTAMP,
+               reset_token_hash = $2,
+               reset_token_expires_at = CURRENT_TIMESTAMP + ($3::integer * INTERVAL '1 millisecond'),
+               reset_consumed_at = NULL,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE customer_id = $1
+             AND otp_consumed_at IS NULL
+             AND otp_expires_at > CURRENT_TIMESTAMP
+             AND attempts < 5`,
+          [
+            account.id,
+            hashCustomerPasswordResetToken(resetToken),
+            CUSTOMER_PASSWORD_RESET_TOKEN_LIFETIME
+          ],
+          client
+        );
+        return consumed.changes === 1;
+      });
+    } catch {
+      logCustomerPasswordResetFailure('verify', 'database');
+      return sendJsonError(res, 503, 'Could not verify the reset code. Please try again.');
+    }
+
+    if (!verified) {
+      return sendJsonError(res, 400, 'The code is invalid, expired, or no longer usable.');
+    }
+    return res.json({ verified: true, resetToken });
+  }
+);
+
+app.post(
+  '/api/customer/password-reset/complete',
+  requireCustomerRequestOrigin,
+  customerRateLimiters.passwordResetComplete,
+  async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const { resetToken, password, confirmPassword } = req.body || {};
+    if (typeof resetToken !== 'string' ||
+        typeof password !== 'string' ||
+        typeof confirmPassword !== 'string' ||
+        password !== confirmPassword) {
+      return sendJsonError(res, 400, 'Enter matching new passwords and a valid reset authorization.');
+    }
+    if (Array.from(password).length < 6) {
+      return sendJsonError(res, 400, 'Password must be at least 6 characters long.');
+    }
+    if (Buffer.byteLength(password, 'utf8') > 72) {
+      return sendJsonError(res, 400, 'Password must not exceed bcrypt’s 72-byte limit.');
+    }
+
+    let tokenHash;
+    try {
+      tokenHash = hashCustomerPasswordResetToken(resetToken);
+    } catch {
+      return sendJsonError(res, 400, 'Enter matching new passwords and a valid reset authorization.');
+    }
+
+    try {
+      const reset = await withTransaction(async (client) => {
+        const candidate = await get(
+          `SELECT customer_id
+           FROM public.customer_password_resets
+           WHERE reset_token_hash = $1
+             AND reset_consumed_at IS NULL
+             AND reset_token_expires_at > CURRENT_TIMESTAMP`,
+          [tokenHash],
+          client
+        );
+        if (!candidate) return null;
+        const account = await get(
+          `SELECT id
+           FROM public.customer_accounts
+           WHERE id = $1
+           FOR UPDATE`,
+          [candidate.customer_id],
+          client
+        );
+        if (!account) return null;
+        const authorization = await get(
+          `SELECT customer_id
+           FROM public.customer_password_resets
+           WHERE reset_token_hash = $1
+             AND reset_consumed_at IS NULL
+             AND reset_token_expires_at > CURRENT_TIMESTAMP
+           FOR UPDATE`,
+          [tokenHash],
+          client
+        );
+        if (!authorization || authorization.customer_id !== candidate.customer_id) return null;
+
+        const passwordHash = await bcrypt.hash(password, 12);
+        const accountUpdate = await run(
+          'UPDATE public.customer_accounts SET password_hash = $1 WHERE id = $2',
+          [passwordHash, authorization.customer_id],
+          client
+        );
+        if (accountUpdate.changes !== 1) throw new Error('Customer account update failed.');
+
+        await run(
+          `UPDATE public.customer_sessions
+           SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP)
+           WHERE customer_id = $1 AND revoked_at IS NULL`,
+          [authorization.customer_id],
+          client
+        );
+        const tokenUpdate = await run(
+          `UPDATE public.customer_password_resets
+           SET reset_token_hash = NULL,
+               reset_token_expires_at = NULL,
+               reset_consumed_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE customer_id = $1 AND reset_consumed_at IS NULL`,
+          [authorization.customer_id],
+          client
+        );
+        if (tokenUpdate.changes !== 1) throw new Error('Password reset authorization update failed.');
+        return authorization.customer_id;
+      });
+
+      if (!reset) {
+        return sendJsonError(res, 400, 'The reset authorization is invalid, expired, or already used.');
+      }
+      clearCustomerSessionCookie(res);
+      return res.json({ message: 'Your password has been reset. Sign in with your new password.' });
+    } catch {
+      logCustomerPasswordResetFailure('complete', 'database');
+      return sendJsonError(res, 503, 'Could not reset the password. Please try again.');
     }
   }
 );

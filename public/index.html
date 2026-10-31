@@ -243,7 +243,52 @@
           <p class="form-error" id="customer-login-error" role="alert"></p>
           <button class="hero-primary" type="submit">Sign in</button>
         </form>
+        <p class="customer-switch customer-forgot-link"><button type="button" data-view-link="customer-forgot-password">Forgot Password?</button></p>
         <p class="customer-switch">New to ApexTyre? <button type="button" data-view-link="customer-register">Create an account</button></p>
+      </div>
+    </section>
+
+    <section class="view-panel market-container customer-view" data-view-panel="customer-forgot-password" hidden>
+      <div class="customer-card">
+        <p class="market-kicker">ACCOUNT RECOVERY</p>
+        <h1>Forgot password?</h1>
+        <p class="customer-intro">Enter the email address linked to your ApexTyre account. If an account exists, we’ll send a reset code.</p>
+        <form id="customer-password-reset-request-form" class="customer-form">
+          <label>Email address<input name="email" type="email" autocomplete="email" maxlength="254" required></label>
+          <p class="form-error" id="customer-password-reset-request-error" role="alert"></p>
+          <button class="hero-primary" type="submit">Send reset code</button>
+        </form>
+        <p class="customer-switch"><button type="button" data-view-link="customer-login">Back to sign in</button></p>
+      </div>
+    </section>
+
+    <section class="view-panel market-container customer-view" data-view-panel="customer-reset-otp" hidden>
+      <div class="customer-card">
+        <p class="market-kicker">VERIFY YOUR EMAIL</p>
+        <h1>Enter reset code</h1>
+        <p class="customer-intro">If an account exists for <strong id="customer-reset-email"></strong>, enter the six-digit code sent to that address.</p>
+        <form id="customer-password-reset-otp-form" class="customer-form">
+          <label>Six-digit code<input name="otp" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required></label>
+          <p class="form-error" id="customer-password-reset-otp-error" role="alert"></p>
+          <button class="hero-primary" type="submit">Verify code</button>
+        </form>
+        <p class="customer-switch">You can request another code after one minute. <button type="button" id="customer-password-reset-resend">Send a new code</button></p>
+        <p class="customer-switch"><button type="button" data-view-link="customer-forgot-password">Change email address</button></p>
+      </div>
+    </section>
+
+    <section class="view-panel market-container customer-view" data-view-panel="customer-reset-password" hidden>
+      <div class="customer-card">
+        <p class="market-kicker">SECURE YOUR ACCOUNT</p>
+        <h1>Choose a new password</h1>
+        <p class="customer-intro">Use at least 6 characters. Your other signed-in sessions will be signed out after the reset.</p>
+        <form id="customer-password-reset-complete-form" class="customer-form">
+          <label>New password<input name="password" type="password" autocomplete="new-password" minlength="6" maxlength="72" required></label>
+          <label>Confirm new password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="6" maxlength="72" required></label>
+          <p class="form-error" id="customer-password-reset-complete-error" role="alert"></p>
+          <button class="hero-primary" type="submit">Reset password</button>
+        </form>
+        <p class="customer-switch"><button type="button" data-view-link="customer-login">Back to sign in</button></p>
       </div>
     </section>
 

@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { after, test } = require('node:test');
@@ -9,12 +10,14 @@ process.env.EMAIL_FROM = 'ApexTyre <test@example.test>';
 process.env.ADMIN_USERNAME = 'test-owner';
 process.env.ADMIN_PASSWORD = 'test-owner-password';
 process.env.SESSION_SECRET = 'test-only-session-secret-with-more-than-32-characters';
+process.env.CUSTOMER_PASSWORD_RESET_SECRET = 'test-only-password-reset-secret-with-more-than-32-characters';
 process.env.NODE_ENV = 'test';
 
 let now = Date.now();
 const state = {
   accounts: new Map(),
   sessions: new Map(),
+  passwordResets: new Map(),
   orders: [],
   orderItems: [],
   nextAccountId: 1,
@@ -28,6 +31,7 @@ function cloneState() {
   return {
     accounts: new Map([...state.accounts].map(([key, value]) => [key, { ...value }])),
     sessions: new Map([...state.sessions].map(([key, value]) => [key, { ...value }])),
+    passwordResets: new Map([...state.passwordResets].map(([key, value]) => [key, { ...value }])),
     orders: state.orders.map((value) => ({ ...value })),
     orderItems: state.orderItems.map((value) => ({ ...value })),
     nextAccountId: state.nextAccountId,
@@ -80,6 +84,59 @@ async function get(sql, params = []) {
       }
       : undefined;
   }
+  if (/SELECT id\s+FROM public\.customer_accounts/.test(sql)) {
+    if (/WHERE id = \$1/.test(sql)) {
+      const account = accountById(params[0]);
+      return account ? { id: account.id } : undefined;
+    }
+    const account = state.accounts.get(params[0]);
+    return account ? { id: account.id } : undefined;
+  }
+  if (sql.includes('SELECT id, full_name') && sql.includes('FROM public.customer_accounts')) {
+    const account = state.accounts.get(params[0]);
+    return account
+      ? { id: account.id, full_name: account.full_name, email: account.email }
+      : undefined;
+  }
+  if (sql.includes('INSERT INTO public.customer_password_resets')) {
+    const [customerId, otpHash] = params;
+    const existing = state.passwordResets.get(Number(customerId));
+    const timestamp = Date.now();
+    if (existing && (existing.resend_available_at > timestamp ||
+        existing.resend_window_started_at > timestamp - 15 * 60 * 1000 && existing.resend_count >= 3)) {
+      return undefined;
+    }
+    const reset = {
+      customer_id: Number(customerId),
+      otp_hash: Buffer.from(otpHash),
+      otp_expires_at: new Date(timestamp + Number(params[2])),
+      attempts: 0,
+      resend_available_at: new Date(timestamp + 60 * 1000),
+      resend_count: existing && existing.resend_window_started_at > timestamp - 15 * 60 * 1000
+        ? existing.resend_count + 1
+        : 1,
+      resend_window_started_at: existing && existing.resend_window_started_at > timestamp - 15 * 60 * 1000
+        ? existing.resend_window_started_at
+        : new Date(timestamp),
+      otp_consumed_at: null,
+      reset_token_hash: null,
+      reset_token_expires_at: null,
+      reset_consumed_at: null
+    };
+    state.passwordResets.set(Number(customerId), reset);
+    return { customer_id: Number(customerId) };
+  }
+  if (sql.includes('SELECT otp_hash, otp_expires_at, attempts, otp_consumed_at')) {
+    const reset = state.passwordResets.get(Number(params[0]));
+    return reset ? { ...reset } : undefined;
+  }
+  if (sql.includes('SELECT customer_id') && sql.includes('reset_token_hash = $1')) {
+    const reset = [...state.passwordResets.values()].find((entry) =>
+      entry.reset_token_hash && Buffer.from(entry.reset_token_hash).equals(Buffer.from(params[0])) &&
+      !entry.reset_consumed_at && entry.reset_token_expires_at > Date.now()
+    );
+    return reset ? { customer_id: reset.customer_id } : undefined;
+  }
   if (sql.includes('FROM public.customer_sessions AS session')) {
     const session = state.sessions.get(Buffer.from(params[0]).toString('hex'));
     const account = session && accountById(session.customer_id);
@@ -101,6 +158,58 @@ async function get(sql, params = []) {
 }
 
 async function run(sql, params = []) {
+  if (sql.includes('UPDATE public.customer_password_resets') && sql.includes('SET attempts = attempts + 1')) {
+    const reset = state.passwordResets.get(Number(params[0]));
+    if (!reset || reset.attempts >= 5) return { changes: 0 };
+    reset.attempts += 1;
+    return { changes: 1 };
+  }
+  if (sql.includes('UPDATE public.customer_password_resets') && sql.includes('reset_token_hash = $2')) {
+    const reset = state.passwordResets.get(Number(params[0]));
+    if (!reset || reset.otp_consumed_at || reset.otp_expires_at <= Date.now() || reset.attempts >= 5) {
+      return { changes: 0 };
+    }
+    reset.otp_consumed_at = new Date(Date.now());
+    reset.reset_token_hash = Buffer.from(params[1]);
+    reset.reset_token_expires_at = new Date(Date.now() + Number(params[2]));
+    reset.reset_consumed_at = null;
+    return { changes: 1 };
+  }
+  if (sql.includes('UPDATE public.customer_password_resets') &&
+      sql.includes('SET otp_consumed_at = CURRENT_TIMESTAMP') &&
+      !sql.includes('reset_token_hash = $2')) {
+    const reset = state.passwordResets.get(Number(params[0]));
+    if (!reset || !reset.otp_hash.equals(Buffer.from(params[1]))) return { changes: 0 };
+    reset.otp_consumed_at = new Date(Date.now());
+    reset.resend_available_at = new Date(Date.now());
+    return { changes: 1 };
+  }
+  if (sql.includes('UPDATE public.customer_accounts SET password_hash')) {
+    const [passwordHash, customerId] = params;
+    const account = accountById(customerId);
+    if (!account) return { changes: 0 };
+    account.password_hash = passwordHash;
+    return { changes: 1 };
+  }
+  if (sql.includes('UPDATE public.customer_sessions') && sql.includes('WHERE customer_id = $1')) {
+    const customerId = Number(params[0]);
+    let changes = 0;
+    for (const session of state.sessions.values()) {
+      if (session.customer_id === customerId && !session.revoked_at) {
+        session.revoked_at = now;
+        changes += 1;
+      }
+    }
+    return { changes };
+  }
+  if (sql.includes('UPDATE public.customer_password_resets') && sql.includes('SET reset_token_hash = NULL')) {
+    const reset = state.passwordResets.get(Number(params[0]));
+    if (!reset || reset.reset_consumed_at) return { changes: 0 };
+    reset.reset_token_hash = null;
+    reset.reset_token_expires_at = null;
+    reset.reset_consumed_at = new Date(Date.now());
+    return { changes: 1 };
+  }
   if (sql.includes('INSERT INTO public.customer_sessions')) {
     const [customerId, tokenHash, duration] = params;
     const key = Buffer.from(tokenHash).toString('hex');
@@ -249,6 +358,10 @@ test('storefront browsing and cart remain public, while checkout resumes after c
   const frontend = fs.readFileSync(path.join(__dirname, '..', 'public', 'script.js'), 'utf8');
   const markup = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
   const backend = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const registrationMarkup = markup.slice(
+    markup.indexOf('id="customer-register-form"'),
+    markup.indexOf('data-view-panel="customer-login"')
+  );
   const registrationHandlerStart = frontend.indexOf("customerRegisterForm.addEventListener('submit'");
   const registrationHandlerEnd = frontend.indexOf("customerLoginForm.addEventListener('submit'", registrationHandlerStart);
   const addToCartStart = frontend.indexOf('window.addToCart = function addToCart');
@@ -264,7 +377,7 @@ test('storefront browsing and cart remain public, while checkout resumes after c
   assert.match(markup, /name="email"/);
   assert.match(markup, /name="mobileNumber"/);
   assert.match(markup, /name="password"[^>]*maxlength="72"/);
-  assert.doesNotMatch(markup, /name="confirmPassword"/i);
+  assert.doesNotMatch(registrationMarkup, /name="confirmPassword"/i);
   assert.match(registrationHandler, /customerApi\([\s\S]*?'\/api\/customer\/register'/);
   assert.match(registrationHandler, /Object\.fromEntries\(form\.entries\(\)\)/);
   assert.match(registrationHandler, /const password = String\(form\.get\('password'\) \|\| ''\)/);
@@ -517,4 +630,182 @@ test('OTP-free customer registration, secure sessions, authenticated customer or
   now += 8 * 60 * 60 * 1000 + 1;
   const expiredProfile = await request('/api/customer/me', { cookie: expiredCookie });
   assert.equal(expiredProfile.response.status, 401);
+});
+
+test('customer password reset hides account existence and enforces one-time OTP and reset authorization', async () => {
+  const resetLogin = await request('/api/customer/login', {
+    method: 'POST',
+    body: { email: 'customer@example.test', password: '  A1bcde  ' }
+  });
+  assert.equal(resetLogin.response.status, 200);
+  const oldSessionCookie = sessionCookie(resetLogin.response);
+  const secondOldLogin = await request('/api/customer/login', {
+    method: 'POST',
+    body: { email: 'customer@example.test', password: '  A1bcde  ' }
+  });
+  assert.equal(secondOldLogin.response.status, 200);
+  const secondOldSessionCookie = sessionCookie(secondOldLogin.response);
+
+  const disallowedOrigin = await request('/api/customer/password-reset/request', {
+    method: 'POST',
+    originHeader: 'https://attacker.example',
+    body: { email: 'customer@example.test' }
+  });
+  assert.equal(disallowedOrigin.response.status, 403);
+
+  const existingRequest = await request('/api/customer/password-reset/request', {
+    method: 'POST',
+    body: { email: ' CUSTOMER@example.test ' }
+  });
+  const unknownRequest = await request('/api/customer/password-reset/request', {
+    method: 'POST',
+    body: { email: 'unknown@example.test' }
+  });
+  assert.equal(existingRequest.response.status, 202);
+  assert.equal(unknownRequest.response.status, existingRequest.response.status);
+  assert.deepEqual(unknownRequest.result, existingRequest.result);
+  assert.equal(sentEmails.filter((email) => email.subject === 'Your ApexTyre password reset code').length, 1);
+  assert.equal(existingRequest.response.headers.get('cache-control'), 'no-store');
+
+  let resetEmails = sentEmails.filter((email) => email.subject === 'Your ApexTyre password reset code');
+  assert.equal(resetEmails.length, 1);
+  assert.deepEqual(resetEmails[0].to, ['customer@example.test']);
+  const firstOtp = resetEmails[0].text.match(/\b\d{6}\b/)[0];
+  const expectedOtpHash = crypto.createHmac('sha256', process.env.CUSTOMER_PASSWORD_RESET_SECRET)
+    .update(`apextyre-password-reset:1:${firstOtp}`, 'utf8')
+    .digest();
+  assert.deepEqual(state.passwordResets.get(1).otp_hash, expectedOtpHash);
+  assert.equal(state.passwordResets.get(1).otp_hash.length, 32);
+
+  const cooldownRequest = await request('/api/customer/password-reset/request', {
+    method: 'POST',
+    body: { email: 'customer@example.test' }
+  });
+  assert.equal(cooldownRequest.response.status, 202);
+  assert.equal(sentEmails.filter((email) => email.subject === 'Your ApexTyre password reset code').length, 1);
+
+  const incorrectOtp = await request('/api/customer/password-reset/verify', {
+    method: 'POST',
+    body: { email: 'customer@example.test', otp: firstOtp === '000000' ? '000001' : '000000' }
+  });
+  assert.equal(incorrectOtp.response.status, 400);
+
+  const verified = await request('/api/customer/password-reset/verify', {
+    method: 'POST',
+    body: { email: 'customer@example.test', otp: firstOtp }
+  });
+  assert.equal(verified.response.status, 200);
+  assert.equal(verified.result.verified, true);
+  assert.match(verified.result.resetToken, /^[A-Za-z0-9_-]{43}$/);
+  const resetToken = verified.result.resetToken;
+  assert.deepEqual(
+    state.passwordResets.get(1).reset_token_hash,
+    crypto.createHash('sha256').update(resetToken, 'utf8').digest()
+  );
+
+  const reusedOtp = await request('/api/customer/password-reset/verify', {
+    method: 'POST',
+    body: { email: 'customer@example.test', otp: firstOtp }
+  });
+  assert.equal(reusedOtp.response.status, 400);
+
+  const shortPassword = await request('/api/customer/password-reset/complete', {
+    method: 'POST',
+    body: { resetToken, password: 'short', confirmPassword: 'short' }
+  });
+  assert.equal(shortPassword.response.status, 400);
+  assert.match(shortPassword.result.error, /at least 6 characters/i);
+
+  const newPassword = 'NewStrong1!';
+  const completedReset = await request('/api/customer/password-reset/complete', {
+    method: 'POST',
+    body: { resetToken, password: newPassword, confirmPassword: newPassword },
+    cookie: oldSessionCookie
+  });
+  assert.equal(completedReset.response.status, 200);
+  assert.match(completedReset.response.headers.get('set-cookie'), /apextyre_customer=.*Expires=/i);
+  assert.equal(state.passwordResets.get(1).reset_token_hash, null);
+  assert.ok(state.accounts.get('customer@example.test').password_hash.startsWith('$2'));
+  assert.notEqual(state.accounts.get('customer@example.test').password_hash, newPassword);
+  const oldSession = await request('/api/customer/me', { cookie: oldSessionCookie });
+  assert.equal(oldSession.response.status, 401);
+  const secondOldSession = await request('/api/customer/me', { cookie: secondOldSessionCookie });
+  assert.equal(secondOldSession.response.status, 401);
+
+  const reusedResetToken = await request('/api/customer/password-reset/complete', {
+    method: 'POST',
+    body: { resetToken, password: newPassword, confirmPassword: newPassword }
+  });
+  assert.equal(reusedResetToken.response.status, 400);
+
+  const oldPasswordLogin = await request('/api/customer/login', {
+    method: 'POST',
+    body: { email: 'customer@example.test', password: '  A1bcde  ' }
+  });
+  assert.equal(oldPasswordLogin.response.status, 401);
+  const newPasswordLogin = await request('/api/customer/login', {
+    method: 'POST',
+    body: { email: 'customer@example.test', password: newPassword }
+  });
+  assert.equal(newPasswordLogin.response.status, 200);
+  const ordersAfterReset = await request('/api/customer/orders', {
+    cookie: sessionCookie(newPasswordLogin.response)
+  });
+  assert.equal(ordersAfterReset.response.status, 200);
+  assert.equal(ordersAfterReset.result.orders.length, 1);
+
+  state.passwordResets.get(1).resend_available_at = new Date(Date.now() - 1);
+  const expiredCodeRequest = await request('/api/customer/password-reset/request', {
+    method: 'POST',
+    body: { email: 'customer@example.test' }
+  });
+  assert.equal(expiredCodeRequest.response.status, 202);
+  resetEmails = sentEmails.filter((email) => email.subject === 'Your ApexTyre password reset code');
+  assert.equal(resetEmails.length, 2);
+  const expiredOtp = resetEmails[1].text.match(/\b\d{6}\b/)[0];
+  state.passwordResets.get(1).otp_expires_at = new Date(Date.now() - 1);
+  const expiredVerification = await request('/api/customer/password-reset/verify', {
+    method: 'POST',
+    body: { email: 'customer@example.test', otp: expiredOtp }
+  });
+  assert.equal(expiredVerification.response.status, 400);
+
+  state.passwordResets.get(1).resend_available_at = new Date(Date.now() - 1);
+  const attemptLimitRequest = await request('/api/customer/password-reset/request', {
+    method: 'POST',
+    body: { email: 'customer@example.test' }
+  });
+  assert.equal(attemptLimitRequest.response.status, 202);
+  resetEmails = sentEmails.filter((email) => email.subject === 'Your ApexTyre password reset code');
+  assert.equal(resetEmails.length, 3);
+  const attemptLimitOtp = resetEmails[2].text.match(/\b\d{6}\b/)[0];
+  const invalidAttempt = attemptLimitOtp === '000000' ? '000001' : '000000';
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const invalid = await request('/api/customer/password-reset/verify', {
+      method: 'POST',
+      body: { email: 'customer@example.test', otp: invalidAttempt }
+    });
+    assert.equal(invalid.response.status, 400);
+  }
+  const afterAttemptLimit = await request('/api/customer/password-reset/verify', {
+    method: 'POST',
+    body: { email: 'customer@example.test', otp: attemptLimitOtp }
+  });
+  assert.equal(afterAttemptLimit.response.status, 400);
+
+  const passwordResetFrontend = fs.readFileSync(path.join(__dirname, '..', 'public', 'script.js'), 'utf8');
+  const markup = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  assert.match(markup, /data-view-panel="customer-forgot-password"/);
+  assert.match(markup, /data-view-panel="customer-reset-otp"/);
+  assert.match(markup, /data-view-panel="customer-reset-password"/);
+  assert.match(markup, /Forgot Password\?/);
+  assert.match(markup, /autocomplete="one-time-code"/);
+  assert.match(passwordResetFrontend, /let passwordResetToken = ''/);
+  assert.doesNotMatch(passwordResetFrontend, /localStorage\.(?:setItem|getItem)\([^)]*passwordResetToken/);
+  const resetBackend = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const resetRoutes = resetBackend.slice(
+    resetBackend.indexOf("app.post(\n  '/api/customer/password-reset/request'"),
+    resetBackend.indexOf("app.post('/api/customer/logout'")
+  );
+  assert.doesNotMatch(resetRoutes, /console\.(?:log|info|warn|error)\([^)]*(?:email|password|otp|token|hash)/i);
 });

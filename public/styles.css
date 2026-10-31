@@ -1416,6 +1416,7 @@ html { overflow-x: clip; }
 .customer-form { display: grid; gap: 14px; }
 .customer-form label small { color: var(--muted); font-weight: 400; }
 .customer-form .hero-primary { width: 100%; justify-content: center; }
+.customer-form .hero-primary:disabled { cursor: wait; opacity: .7; }
 .customer-form input, .customer-orders-heading select {
   min-width: 0;
   height: 44px;
@@ -1438,6 +1439,9 @@ html { overflow-x: clip; }
 .customer-secondary:hover { border-color: var(--dark); }
 .customer-switch { margin: 20px 0 0; color: var(--muted); font-size: 12px; }
 .customer-switch button { padding: 0; border: 0; background: transparent; color: #087c70; font-weight: 700; }
+.customer-switch button:hover, .customer-switch button:focus-visible { text-decoration: underline; }
+.customer-intro strong { overflow-wrap: anywhere; }
+.customer-forgot-link { margin: 2px 0 0; text-align: right; }
 .customer-status { min-height: 18px; margin: 0; color: var(--muted); font-size: 12px; }
 .customer-account-heading, .customer-orders-heading {
   display: flex;

@@ -55,6 +55,9 @@ const themeToggle = document.querySelector('#theme-toggle');
 const themeIcon = themeToggle.querySelector('[data-theme-icon]');
 const customerRegisterForm = document.querySelector('#customer-register-form');
 const customerLoginForm = document.querySelector('#customer-login-form');
+const customerPasswordResetRequestForm = document.querySelector('#customer-password-reset-request-form');
+const customerPasswordResetOtpForm = document.querySelector('#customer-password-reset-otp-form');
+const customerPasswordResetCompleteForm = document.querySelector('#customer-password-reset-complete-form');
 const customerAccountNav = document.querySelector('#customer-account-nav');
 const themeStorageKey = 'theme';
 
@@ -108,6 +111,8 @@ let checkoutItems = [];
 let checkoutSource = 'single';
 let currentCustomer = null;
 let pendingCheckout = null;
+let passwordResetEmail = '';
+let passwordResetToken = '';
 
 function applyTheme(theme) {
   const activeTheme = theme === 'light' ? 'light' : 'dark';
@@ -449,9 +454,19 @@ async function refreshCustomerSession() {
 function switchTab(viewName) {
   const allowedViews = [
     'home', 'about', 'contact', 'community',
-    'customer-register', 'customer-login', 'customer-account'
+    'customer-register', 'customer-login', 'customer-account',
+    'customer-forgot-password', 'customer-reset-otp', 'customer-reset-password'
   ];
   const view = allowedViews.includes(viewName) ? viewName : 'home';
+  if (!['customer-forgot-password', 'customer-reset-otp', 'customer-reset-password'].includes(view)) {
+    passwordResetEmail = '';
+    passwordResetToken = '';
+    customerPasswordResetRequestForm.reset();
+    customerPasswordResetOtpForm.reset();
+    customerPasswordResetCompleteForm.reset();
+  } else if (view !== 'customer-reset-password') {
+    passwordResetToken = '';
+  }
   document.querySelectorAll('[data-view-panel]').forEach((panel) => {
     panel.hidden = panel.dataset.viewPanel !== view;
   });
@@ -1022,6 +1037,115 @@ customerLoginForm.addEventListener('submit', async (event) => {
   }
 });
 
+customerPasswordResetRequestForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const errorElement = document.querySelector('#customer-password-reset-request-error');
+  const submitButton = customerPasswordResetRequestForm.querySelector('[type="submit"]');
+  const originalLabel = submitButton.textContent;
+  errorElement.textContent = '';
+  submitButton.disabled = true;
+  submitButton.textContent = 'Sending code…';
+  passwordResetEmail = String(new FormData(customerPasswordResetRequestForm).get('email') || '').trim().toLowerCase();
+  try {
+    const result = await customerApi(
+      '/api/customer/password-reset/request',
+      customerJsonRequest('POST', { email: passwordResetEmail })
+    );
+    document.querySelector('#customer-reset-email').textContent = passwordResetEmail;
+    customerPasswordResetOtpForm.reset();
+    switchTab('customer-reset-otp');
+    showToast(result.message);
+  } catch (error) {
+    errorElement.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalLabel;
+  }
+});
+
+customerPasswordResetOtpForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const errorElement = document.querySelector('#customer-password-reset-otp-error');
+  const submitButton = customerPasswordResetOtpForm.querySelector('[type="submit"]');
+  const originalLabel = submitButton.textContent;
+  errorElement.textContent = '';
+  submitButton.disabled = true;
+  submitButton.textContent = 'Verifying code…';
+  const otp = String(new FormData(customerPasswordResetOtpForm).get('otp') || '');
+  try {
+    const result = await customerApi(
+      '/api/customer/password-reset/verify',
+      customerJsonRequest('POST', { email: passwordResetEmail, otp })
+    );
+    passwordResetToken = result.resetToken;
+    customerPasswordResetOtpForm.reset();
+    switchTab('customer-reset-password');
+  } catch (error) {
+    errorElement.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalLabel;
+  }
+});
+
+document.querySelector('#customer-password-reset-resend').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  const errorElement = document.querySelector('#customer-password-reset-otp-error');
+  const originalLabel = button.textContent;
+  errorElement.textContent = '';
+  button.disabled = true;
+  button.textContent = 'Sending code…';
+  try {
+    const result = await customerApi(
+      '/api/customer/password-reset/request',
+      customerJsonRequest('POST', { email: passwordResetEmail })
+    );
+    showToast(result.message);
+  } catch (error) {
+    errorElement.textContent = error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+});
+
+customerPasswordResetCompleteForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const errorElement = document.querySelector('#customer-password-reset-complete-error');
+  const submitButton = customerPasswordResetCompleteForm.querySelector('[type="submit"]');
+  const originalLabel = submitButton.textContent;
+  errorElement.textContent = '';
+  submitButton.disabled = true;
+  submitButton.textContent = 'Resetting password…';
+  const form = new FormData(customerPasswordResetCompleteForm);
+  try {
+    const result = await customerApi(
+      '/api/customer/password-reset/complete',
+      customerJsonRequest('POST', {
+        resetToken: passwordResetToken,
+        password: String(form.get('password') || ''),
+        confirmPassword: String(form.get('confirmPassword') || '')
+      })
+    );
+    customerPasswordResetCompleteForm.reset();
+    customerPasswordResetRequestForm.reset();
+    customerLoginForm.elements.email.value = passwordResetEmail;
+    passwordResetToken = '';
+    passwordResetEmail = '';
+    currentCustomer = null;
+    customerAccountNav.dataset.viewLink = 'customer-login';
+    customerAccountNav.querySelector('strong').textContent = 'Customer';
+    customerAccountNav.querySelector('small').textContent = 'Sign In / Register';
+    switchTab('customer-login');
+    showToast(result.message);
+  } catch (error) {
+    errorElement.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalLabel;
+  }
+});
+
 document.querySelector('#customer-logout').addEventListener('click', async (event) => {
   const button = event.currentTarget;
   const originalLabel = button.textContent;
@@ -1053,6 +1177,9 @@ document.querySelectorAll('[data-view-link]').forEach((link) => {
     if (link.dataset.viewLink === 'customer-account') {
       void openCustomerAccount();
     } else {
+      if (link.dataset.viewLink === 'customer-forgot-password' && passwordResetEmail) {
+        customerPasswordResetRequestForm.elements.email.value = passwordResetEmail;
+      }
       switchTab(link.dataset.viewLink);
     }
   });

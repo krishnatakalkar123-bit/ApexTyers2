@@ -50,6 +50,7 @@ apextyre/
    - `BUSINESS_GSTIN`: registered seller GSTIN required for a statutory invoice
    - `BUSINESS_ADDRESS`: registered seller address required for a statutory invoice
    - `SESSION_SECRET`: a private random value with at least 32 characters
+   - `CUSTOMER_PASSWORD_RESET_SECRET`: a separate private random value with at least 32 characters for HMAC-protected password reset codes
    - `FRONTEND_ORIGIN`: exact Netlify site origin for credentialed CORS
 
    Generate a strong session secret from PowerShell with:
@@ -58,7 +59,7 @@ apextyre/
    node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
    ```
 
-   Keep the Resend API key in the backend environment only; never put it in frontend files, commit it, or log it. Email settings can be left blank during local development; orders are still saved and email sending is skipped.
+   Generate a separate value for `SESSION_SECRET` and `CUSTOMER_PASSWORD_RESET_SECRET`. Keep both secrets and the Resend API key in the backend environment only; never put them in frontend files, commit them, or log them. Email settings can be left blank during local development; orders are still saved and email sending is skipped. Password reset requires a configured reset secret and working Resend settings.
 
 5. Set `window.APEXTYRE_API_URL` in `public/api-config.js` to the Render backend origin when the frontend is hosted separately. Leave it empty for local development.
 
@@ -162,9 +163,21 @@ psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f .\scripts\migrations\001_customer
 
 Do not rerun this one-time migration after success. No existing guest orders are linked automatically; the new foreign key remains null for them. If legacy guest orders need association later, require a separate safe proof-of-ownership process rather than matching an unverified email.
 
+### Password reset setup
+
+Password reset uses a separate `customer_password_resets` table and does not change or remove customer accounts, sessions, or orders. After confirming `001_customer_accounts.sql` has already been applied to the intended Neon database, back up the database and apply [002_customer_password_resets.sql](./scripts/migrations/002_customer_password_resets.sql) exactly once. From a trusted PowerShell session in this project directory, use the Neon connection string already configured in your local environment without printing it:
+
+```powershell
+psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f .\scripts\migrations\002_customer_password_resets.sql
+```
+
+Do not run this migration from application startup or against a different Neon branch/database. Do not rerun it after success. Set `CUSTOMER_PASSWORD_RESET_SECRET` in the Render backend environment to a newly generated random value of at least 32 characters; generate it with the PowerShell command above and do not reuse `SESSION_SECRET`. The same value must remain stable across Render restarts and instances. `RESEND_API_KEY` and `EMAIL_FROM` must also be configured with a sender verified by Resend. The API returns the same generic response for registered and unknown email addresses. OTPs expire after 10 minutes, can be resent after a one-minute cooldown up to three requests per 15 minutes per account, and allow at most five guesses.
+
+For rollout, first apply the migration manually to the correct Neon database, then set the backend secret and email settings in Render and deploy the backend. Deploy the updated static frontend to Netlify after the backend is ready. `CUSTOMER_PASSWORD_RESET_SECRET`, `DATABASE_URL`, and `RESEND_API_KEY` belong only in Render/local backend environment variables, never in Netlify or browser code.
+
 ### Resend sender setup
 
-Keep `RESEND_API_KEY` in Render/local backend environment variables only. Resend is used for order notifications, not customer registration or login. Use `EMAIL_FROM` with a sender domain verified in Resend. Resend test mode may restrict delivery to verified/test recipients; delivery to arbitrary customer addresses generally requires verifying a custom domain and completing the DNS records Resend provides. This repository cannot determine the current Resend account mode or domain verification state.
+Keep `RESEND_API_KEY` in Render/local backend environment variables only. Resend is used for order notifications and password-reset codes, not customer registration or login. Use `EMAIL_FROM` with a sender domain verified in Resend. Resend test mode may restrict delivery to verified/test recipients; delivery to arbitrary customer addresses generally requires verifying a custom domain and completing the DNS records Resend provides. This repository cannot determine the current Resend account mode or domain verification state.
 
 ### Customer account checks
 
